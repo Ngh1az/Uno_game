@@ -1,0 +1,37 @@
+{
+  "firestore": {
+    "database": "(default)",
+    "location": "asia-southeast1",
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "auth": {
+    "providers": {
+      "anonymous": true,
+      "googleSignIn": {
+        "oAuthBrandDisplayName": "UNO Game",
+        "supportEmail": "huynhhnghia991@gmail.com"
+      }
+    }
+  },
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "uno-game-ifd3v4",
+          "appId": "1:183989048778:android:78c69c93817a77de326b33",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "uno-game-ifd3v4",
+          "configurations": {
+            "android": "1:183989048778:android:78c69c93817a77de326b33",
+            "web": "1:183989048778:web:4dcf3426fe506e21326b33"
+          }
+        }
+      }
+    }
+  }
+}

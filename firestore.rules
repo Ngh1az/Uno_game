@@ -1,0 +1,51 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function playerIds(data) {
+      return data.get('playerIds', []);
+    }
+
+    function isMember(data) {
+      return isSignedIn() && request.auth.uid in playerIds(data);
+    }
+
+    function isWaiting(data) {
+      return data.get('status', '') == 'waiting';
+    }
+
+    // Chỉ cho phép tự thêm mình vào phòng đang chờ.
+    function isValidJoin() {
+      return isSignedIn()
+        && isWaiting(resource.data)
+        && isWaiting(request.resource.data)
+        && !(request.auth.uid in playerIds(resource.data))
+        && request.auth.uid in playerIds(request.resource.data)
+        && playerIds(request.resource.data).size()
+            == playerIds(resource.data).size() + 1
+        && request.resource.data.players.size()
+            == resource.data.players.size() + 1;
+    }
+
+    match /rooms/{roomId} {
+      // Đọc: thành viên phòng, hoặc phòng đang chờ (để nhập mã vào).
+      allow read: if isSignedIn()
+        && (isMember(resource.data) || isWaiting(resource.data));
+
+      allow create: if isSignedIn()
+        && request.resource.data.hostId == request.auth.uid
+        && request.auth.uid in playerIds(request.resource.data)
+        && playerIds(request.resource.data).size() == 1
+        && request.resource.data.players.size() == 1
+        && isWaiting(request.resource.data);
+
+      allow update: if isSignedIn()
+        && (isMember(resource.data) || isValidJoin());
+
+      allow delete: if isMember(resource.data);
+    }
+  }
+}
