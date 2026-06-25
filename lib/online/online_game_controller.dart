@@ -53,12 +53,31 @@ class OnlineGameController extends ChangeNotifier {
 
   Future<void> startGame() => _guard(() => _service.startGame(code));
 
-  Future<void> playCard(UnoCard card, {CardColor? chosenColor}) =>
-      _guard(() => _service.playCard(code, card, chosenColor: chosenColor));
+  Future<void> playCard(
+    UnoCard card, {
+    CardColor? chosenColor,
+    int? handIndex,
+    bool declaredUno = false,
+  }) =>
+      _guard(() => _service.playCard(
+            code,
+            card,
+            chosenColor: chosenColor,
+            handIndex: handIndex,
+            declaredUno: declaredUno,
+          ));
 
   Future<void> drawCard() => _guard(() => _service.drawCard(code));
 
   Future<void> passTurn() => _guard(() => _service.endTurn(code));
+
+  Future<void> callUno() => _guard(() => _service.callUno(code));
+
+  Future<void> catchUno(String targetId) =>
+      _guard(() => _service.catchUno(code, targetId));
+
+  Future<void> acceptDrawStack() =>
+      _guard(() => _service.acceptDrawStack(code));
 
   Future<void> leave() async {
     await _service.leaveRoom(code);
@@ -76,6 +95,7 @@ class OnlineGameController extends ChangeNotifier {
 
   void clearError() {
     _error = null;
+    notifyListeners();
   }
 
   @override

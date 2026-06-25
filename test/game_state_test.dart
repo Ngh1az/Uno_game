@@ -77,7 +77,7 @@ void main() {
     expect(g.currentPlayerIndex, 2);
   });
 
-  test('Lá +2 khiến người kế tiếp bốc 2 và mất lượt', () {
+  test('Lá +2 bắt đầu chuỗi cộng dồn — người kế phải đáp hoặc nhận', () {
     final players = [
       UnoPlayer(id: 'p1', name: 'A'),
       UnoPlayer(id: 'p2', name: 'B'),
@@ -101,10 +101,50 @@ void main() {
     players[0].hand.add(draw2);
     players[0].hand.add(
       const UnoCard(color: CardColor.green, type: CardType.number, number: 3),
-    ); // lá độn để không thắng ngay
+    );
     g.playCard('p1', draw2);
-    expect(players[1].hand.length, 2); // B bốc 2
-    expect(g.currentPlayerIndex, 2); // tới C
+    expect(g.pendingDrawCount, 2);
+    expect(g.currentPlayerIndex, 1);
+    expect(players[1].hand.length, 0);
+  });
+
+  test('Chuỗi +2 rồi +4 cộng thành 6 lá', () {
+    final players = [
+      UnoPlayer(id: 'p1', name: 'A'),
+      UnoPlayer(id: 'p2', name: 'B'),
+      UnoPlayer(id: 'p3', name: 'C'),
+    ];
+    final draw2 = const UnoCard(color: CardColor.red, type: CardType.drawTwo);
+    final draw4 = const UnoCard(color: CardColor.wild, type: CardType.wildDrawFour);
+    final g = GameState(
+      players: players,
+      drawPile: List.generate(
+        12,
+        (_) => const UnoCard(color: CardColor.blue, type: CardType.number, number: 1),
+      ),
+      discardPile: [
+        const UnoCard(color: CardColor.red, type: CardType.number, number: 5),
+      ],
+      currentPlayerIndex: 0,
+      direction: PlayDirection.clockwise,
+      activeColor: CardColor.red,
+      status: GameStatus.playing,
+    );
+    players[0].hand.addAll([
+      draw2,
+      const UnoCard(color: CardColor.green, type: CardType.number, number: 3),
+    ]);
+    players[1].hand.addAll([
+      draw4,
+      const UnoCard(color: CardColor.yellow, type: CardType.number, number: 1),
+    ]);
+    g.playCard('p1', draw2);
+    g.playCard('p2', draw4, chosenColor: CardColor.blue);
+    expect(g.pendingDrawCount, 6);
+    expect(g.currentPlayerIndex, 2);
+    g.acceptDrawStack('p3');
+    expect(g.pendingDrawCount, 0);
+    expect(players[2].hand.length, 6);
   });
 
   test('Hết bài thì thắng', () {
@@ -130,6 +170,95 @@ void main() {
     expect(g.winnerId, 'p1');
   });
 
+  test('Đánh đúng lá khi có 2 lá trùng trong tay', () {
+    final first = const UnoCard(color: CardColor.red, type: CardType.number, number: 5);
+    final second = const UnoCard(color: CardColor.red, type: CardType.number, number: 5);
+    final players = [
+      UnoPlayer(id: 'p1', name: 'A'),
+      UnoPlayer(id: 'p2', name: 'B'),
+    ];
+    players[0].hand.addAll([first, second]);
+    final g = GameState(
+      players: players,
+      drawPile: [const UnoCard(color: CardColor.blue, type: CardType.number, number: 1)],
+      discardPile: [
+        const UnoCard(color: CardColor.red, type: CardType.number, number: 2),
+      ],
+      currentPlayerIndex: 0,
+      direction: PlayDirection.clockwise,
+      activeColor: CardColor.red,
+      status: GameStatus.playing,
+    );
+
+    g.playCard('p1', second, handIndex: 1);
+    expect(players[0].hand.length, 1);
+    expect(identical(players[0].hand.single, first), isTrue);
+    expect(g.topCard, second);
+  });
+
+  test('Quên hô UNO khi xuống 1 lá thì bị bắt lỗi rút 2', () {
+    final players = [
+      UnoPlayer(id: 'p1', name: 'A'),
+      UnoPlayer(id: 'p2', name: 'B'),
+    ];
+    final penultimate =
+        const UnoCard(color: CardColor.red, type: CardType.number, number: 3);
+    players[0].hand.add(penultimate);
+    players[0].hand.add(
+      const UnoCard(color: CardColor.green, type: CardType.number, number: 8),
+    );
+    final g = GameState(
+      players: players,
+      drawPile: List.generate(
+        5,
+        (_) => const UnoCard(color: CardColor.blue, type: CardType.number, number: 1),
+      ),
+      discardPile: [
+        const UnoCard(color: CardColor.red, type: CardType.number, number: 2),
+      ],
+      currentPlayerIndex: 0,
+      direction: PlayDirection.clockwise,
+      activeColor: CardColor.red,
+      status: GameStatus.playing,
+    );
+
+    g.playCard('p1', penultimate);
+    expect(g.catchableUnoPlayerId, 'p1');
+    expect(players[0].hand.length, 1);
+
+    g.catchUno('p2', 'p1');
+    expect(g.catchableUnoPlayerId, isNull);
+    expect(players[0].hand.length, 3);
+  });
+
+  test('Hô UNO trước khi đánh lá áp chót thì không bị bắt', () {
+    final players = [
+      UnoPlayer(id: 'p1', name: 'A'),
+      UnoPlayer(id: 'p2', name: 'B'),
+    ];
+    final penultimate =
+        const UnoCard(color: CardColor.red, type: CardType.number, number: 3);
+    players[0].hand.add(penultimate);
+    players[0].hand.add(
+      const UnoCard(color: CardColor.green, type: CardType.number, number: 8),
+    );
+    final g = GameState(
+      players: players,
+      drawPile: [const UnoCard(color: CardColor.blue, type: CardType.number, number: 1)],
+      discardPile: [
+        const UnoCard(color: CardColor.red, type: CardType.number, number: 2),
+      ],
+      currentPlayerIndex: 0,
+      direction: PlayDirection.clockwise,
+      activeColor: CardColor.red,
+      status: GameStatus.playing,
+    );
+
+    g.callUno('p1');
+    g.playCard('p1', penultimate, declaredUno: true);
+    expect(g.catchableUnoPlayerId, isNull);
+  });
+
   test('Bot có thể chơi trọn ván mà không lỗi', () {
     final g = _newGame(seed: 42);
     var guard = 0;
@@ -151,6 +280,27 @@ void main() {
 /// Cho người chơi 'thật' đi tự động (chỉ dùng trong test) để chạy hết ván.
 void playHumanAuto(GameState g) {
   final p = g.currentPlayer;
+  if (g.mustRespondToDrawStack) {
+    final stackable = g
+        .playableCards(p)
+        .where(
+          (c) =>
+              c.type == CardType.drawTwo ||
+              c.type == CardType.wildDrawFour,
+        )
+        .toList();
+    if (stackable.isNotEmpty) {
+      final card = stackable.first;
+      g.playCard(
+        p.id,
+        card,
+        chosenColor: card.isWild ? CardColor.red : null,
+      );
+    } else {
+      g.acceptDrawStack(p.id);
+    }
+    return;
+  }
   final playable = g.playableCards(p);
   if (playable.isNotEmpty) {
     final card = playable.firstWhere((c) => !c.isWild, orElse: () => playable.first);

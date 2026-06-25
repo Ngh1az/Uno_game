@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../user/cloud_progress_service.dart';
 import '../user/user_session.dart';
 import 'daily_quest.dart';
 
@@ -203,6 +204,16 @@ class DailyQuestStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Ghi xu local (và đẩy cloud nếu đã đăng nhập Google).
+  Future<void> persistCoins() async {
+    if (!_canWrite) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_k(_uid, 'coins'), coins);
+    if (UserSession.syncsToCloud) {
+      await CloudProgressService.instance.pushCoins(_uid, coins);
+    }
+  }
+
   /// Chuyển dữ liệu cũ (chung máy) sang uid đang đăng nhập — một lần.
   Future<void> _migrateLegacyForUid(
     SharedPreferences prefs,
@@ -254,7 +265,7 @@ class DailyQuestStore extends ChangeNotifier {
     await prefs.setString(_k(_uid, 'daily_date'), _today);
     final data = {for (final q in dailyQuests) q.id: q.toJson()};
     await prefs.setString(_k(_uid, 'daily_data'), jsonEncode(data));
-    await prefs.setInt(_k(_uid, 'coins'), coins);
+    await persistCoins();
   }
 
   Future<void> _saveWeekly() async {
@@ -267,7 +278,7 @@ class DailyQuestStore extends ChangeNotifier {
       _k(_uid, 'weekly_login_days'),
       jsonEncode(_weeklyLoginDays),
     );
-    await prefs.setInt(_k(_uid, 'coins'), coins);
+    await persistCoins();
   }
 
   void _bumpDaily(String id, {int amount = 1}) {
@@ -308,6 +319,10 @@ class DailyQuestStore extends ChangeNotifier {
 
   void markOfflineWin() {
     _bumpDaily('win_offline');
+    _bumpWeekly('win_games');
+  }
+
+  void markOnlineWin() {
     _bumpWeekly('win_games');
   }
 
@@ -357,8 +372,7 @@ class DailyQuestStore extends ChangeNotifier {
     if (coins < amount) return 'Không đủ xu UNO.';
     coins -= amount;
     notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_k(_uid, 'coins'), coins);
+    await persistCoins();
     return null;
   }
 

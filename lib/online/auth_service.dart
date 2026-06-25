@@ -5,7 +5,9 @@ import 'package:flutter/foundation.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
 import '../config/google_auth_config.dart';
+import '../security/action_rate_limit.dart';
 import '../user/user_session.dart';
+import '../friends/presence_service.dart';
 import 'guest_session_store.dart';
 
 /// Quản lý đăng nhập: Google (GIS) hoặc khách (ẩn danh).
@@ -115,25 +117,54 @@ class AuthService {
   }
 
   static Future<void> _signInToFirebase(GoogleSignInAccount account) async {
-    final current = FirebaseAuth.instance.currentUser;
-    if (current != null && !current.isAnonymous) return;
-
     final idToken = account.authentication.idToken;
     if (idToken == null || idToken.isEmpty) {
-      throw StateError('Google Sign-In không trả về idToken.');
+      throw StateError(
+        'Google không trả về idToken. Thêm SHA-1 debug vào Firebase rồi tải lại google-services.json.',
+      );
+    }
+
+    final auth = FirebaseAuth.instance;
+    final current = auth.currentUser;
+    if (current != null && !current.isAnonymous) return;
+
+    final credential = GoogleAuthProvider.credential(idToken: idToken);
+
+    if (current != null && current.isAnonymous) {
+      await UserSession.rememberGuestProgressUid(current.uid);
+    } else {
+      final storedGuestUid = await GuestSessionStore.readUid();
+      if (storedGuestUid != null) {
+        await UserSession.rememberGuestProgressUid(storedGuestUid);
+      }
     }
 
     await UserSession.deactivate();
     await GuestSessionStore.clear();
 
-    await FirebaseAuth.instance.signInWithCredential(
-      GoogleAuthProvider.credential(idToken: idToken),
-    );
-    await FirebaseAuth.instance.currentUser?.reload();
+    if (current != null && current.isAnonymous) {
+      try {
+        await current.linkWithCredential(credential);
+      } on FirebaseAuthException catch (e) {
+        if (e.code == 'credential-already-in-use' ||
+            e.code == 'email-already-in-use') {
+          await auth.signOut();
+          await auth.signInWithCredential(credential);
+        } else {
+          rethrow;
+        }
+      }
+    } else {
+      await auth.signInWithCredential(credential);
+    }
+    await auth.currentUser?.reload();
   }
 
   /// Đăng nhập khách — phiên Firebase + backup local, giữ khi mở lại app.
   Future<void> signInAsGuest() async {
+    final limited = await ActionRateLimit.tryGuestSignIn();
+    if (limited != null) throw StateError(limited);
+
     await _auth.signInAnonymously();
     final user = _auth.currentUser;
     if (user != null) {
@@ -156,11 +187,13 @@ class AuthService {
       );
     }
 
-    await GoogleSignIn.instance.authenticate();
+    final account = await GoogleSignIn.instance.authenticate();
+    await _signInToFirebase(account);
   }
 
   /// Đăng xuất — xóa phiên Firebase/Google và dữ liệu khách trên máy.
   Future<void> signOut() async {
+    await PresenceService.instance.goOffline();
     await UserSession.deactivate();
     if (_googleInitialized) {
       try {

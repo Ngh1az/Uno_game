@@ -3,29 +3,28 @@ import 'package:flutter/material.dart';
 import 'home_layout.dart';
 import 'menu_action_button.dart';
 
-/// Hai nút chọn chế độ chơi — căn giữa, co giãn theo màn hình.
+/// Nút chơi + hàng xếp hạng / bạn bè — gọn, đặt dưới khu nhiệm vụ.
 class HomePlayMenu extends StatelessWidget {
   final VoidCallback onPlayOffline;
   final VoidCallback onPlayOnline;
+  final VoidCallback onLeaderboard;
+  final VoidCallback onFriends;
   final bool includePadding;
-  final bool compact;
 
   const HomePlayMenu({
     super.key,
     required this.onPlayOffline,
     required this.onPlayOnline,
+    required this.onLeaderboard,
+    required this.onFriends,
     this.includePadding = true,
-    this.compact = false,
   });
 
   static const _gold = Color(0xFFFFD54F);
 
   @override
   Widget build(BuildContext context) {
-    final size = MediaQuery.sizeOf(context);
-    final gap = compact
-        ? 8.0
-        : (size.height * 0.018).clamp(12.0, 18.0);
+    const gap = 8.0;
 
     final content = Center(
       child: ConstrainedBox(
@@ -35,20 +34,46 @@ class HomePlayMenu extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _sectionTitle(),
-            SizedBox(height: gap * 0.75),
+            _sectionTitle('CHƠI'),
+            const SizedBox(height: 6),
             MenuActionButton(
               icon: Icons.smart_toy_rounded,
               title: 'Chơi với máy',
               color: const Color(0xFFD32F2F),
               onTap: onPlayOffline,
+              compact: true,
             ),
-            SizedBox(height: gap),
+            const SizedBox(height: gap),
             MenuActionButton(
               icon: Icons.public_rounded,
               title: 'Chơi online',
               color: const Color(0xFF1565C0),
               onTap: onPlayOnline,
+              compact: true,
+            ),
+            const SizedBox(height: gap + 2),
+            Row(
+              children: [
+                Expanded(
+                  child: MenuActionButton(
+                    icon: Icons.emoji_events_rounded,
+                    title: 'Xếp hạng',
+                    color: const Color(0xFFE65100),
+                    onTap: onLeaderboard,
+                    compact: true,
+                  ),
+                ),
+                const SizedBox(width: gap),
+                Expanded(
+                  child: MenuActionButton(
+                    icon: Icons.people_rounded,
+                    title: 'Bạn bè',
+                    color: const Color(0xFF6A1B9A),
+                    onTap: onFriends,
+                    compact: true,
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -63,19 +88,19 @@ class HomePlayMenu extends StatelessWidget {
     );
   }
 
-  Widget _sectionTitle() {
+  Widget _sectionTitle(String label) {
     return Row(
       children: [
         Expanded(child: _goldLine()),
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 10),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
           child: Text(
-            'CHỌN CHẾ ĐỘ',
-            style: TextStyle(
+            label,
+            style: const TextStyle(
               color: _gold,
-              fontSize: 12,
+              fontSize: 11,
               fontWeight: FontWeight.w800,
-              letterSpacing: 1.3,
+              letterSpacing: 1.1,
             ),
           ),
         ),

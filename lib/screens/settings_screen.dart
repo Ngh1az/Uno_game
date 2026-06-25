@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../app_settings.dart';
+import '../game/game_limits.dart';
 import '../online/auth_service.dart';
+import '../widgets/app_snack.dart';
 import '../widgets/sign_out_dialog.dart';
 import '../widgets/uno_circle_button.dart';
 import '../widgets/user_avatar.dart';
@@ -13,6 +15,11 @@ class SettingsScreen extends StatelessWidget {
   static const _bg = Color(0xFF1A0505);
   static const _card = Color(0xFF2A0707);
   static const _accent = Color(0xFFFFC400);
+  static const _comingSoonLabel = 'Sắp ra mắt';
+
+  static void _comingSoon(BuildContext context) {
+    AppSnack.info(context, _comingSoonLabel, icon: Icons.hourglass_top_rounded);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -42,10 +49,12 @@ class SettingsScreen extends StatelessWidget {
                         'Âm thanh',
                         [
                           _switchTile(
+                            context,
                             icon: Icons.volume_up,
                             title: 'Bật âm thanh',
                             value: s.soundEnabled,
                             onChanged: s.setSoundEnabled,
+                            comingSoon: true,
                           ),
                           _sliderTile(
                             icon: Icons.tune,
@@ -53,20 +62,25 @@ class SettingsScreen extends StatelessWidget {
                             value: s.soundVolume,
                             enabled: s.soundEnabled,
                             onChanged: s.setSoundVolume,
+                            comingSoon: true,
                           ),
                           _switchTile(
+                            context,
                             icon: Icons.music_note,
                             title: 'Nhạc nền',
                             value: s.musicEnabled,
                             enabled: s.soundEnabled,
                             onChanged: s.setMusicEnabled,
+                            comingSoon: true,
                           ),
                           _switchTile(
+                            context,
                             icon: Icons.graphic_eq,
                             title: 'Hiệu ứng âm thanh',
                             value: s.sfxEnabled,
                             enabled: s.soundEnabled,
                             onChanged: s.setSfxEnabled,
+                            comingSoon: true,
                           ),
                         ],
                       ),
@@ -74,24 +88,30 @@ class SettingsScreen extends StatelessWidget {
                         'Thông báo',
                         [
                           _switchTile(
+                            context,
                             icon: Icons.notifications,
                             title: 'Bật thông báo',
                             value: s.notificationsEnabled,
                             onChanged: s.setNotificationsEnabled,
+                            comingSoon: true,
                           ),
                           _switchTile(
+                            context,
                             icon: Icons.meeting_room,
                             title: 'Lời mời phòng',
                             value: s.roomInviteNotifications,
                             enabled: s.notificationsEnabled,
                             onChanged: s.setRoomInviteNotifications,
+                            comingSoon: true,
                           ),
                           _switchTile(
+                            context,
                             icon: Icons.swap_horiz,
                             title: 'Đến lượt bạn',
                             value: s.turnNotifications,
                             enabled: s.notificationsEnabled,
                             onChanged: s.setTurnNotifications,
+                            comingSoon: true,
                           ),
                         ],
                       ),
@@ -99,10 +119,12 @@ class SettingsScreen extends StatelessWidget {
                         'Ngôn ngữ',
                         [
                           _choiceTile(
+                            context,
                             icon: Icons.language,
                             title: 'Ngôn ngữ',
                             subtitle: s.languageLabel,
                             onTap: () => _pickLanguage(context),
+                            comingSoon: true,
                           ),
                         ],
                       ),
@@ -112,25 +134,33 @@ class SettingsScreen extends StatelessWidget {
                           _sliderTile(
                             icon: Icons.smart_toy,
                             title: 'Số bot mặc định',
-                            value: (s.defaultBotCount - 1) / 4,
-                            label: '${s.defaultBotCount} bot',
+                            value: (s.defaultBotCount - GameLimits.minBots) /
+                                (GameLimits.maxBots - GameLimits.minBots),
+                            label:
+                                '${s.defaultBotCount} bot · ${s.defaultBotCount + 1} người',
                             enabled: true,
-                            onChanged: (v) =>
-                                s.setDefaultBotCount(1 + (v * 4).round()),
+                            onChanged: (v) => s.setDefaultBotCount(
+                              GameLimits.minBots +
+                                  (v * (GameLimits.maxBots - GameLimits.minBots))
+                                      .round(),
+                            ),
                           ),
                           _choiceTile(
+                            context,
                             icon: Icons.speed,
                             title: 'Tốc độ bot',
                             subtitle: s.botSpeedLabel,
                             onTap: () => _pickBotSpeed(context),
                           ),
                           _switchTile(
+                            context,
                             icon: Icons.lightbulb_outline,
                             title: 'Gợi ý lá có thể đánh',
                             value: s.showPlayableHints,
                             onChanged: s.setShowPlayableHints,
                           ),
                           _switchTile(
+                            context,
                             icon: Icons.campaign,
                             title: 'Tự động gọi UNO',
                             value: s.autoUnoCall,
@@ -142,16 +172,19 @@ class SettingsScreen extends StatelessWidget {
                         'Hiển thị',
                         [
                           _switchTile(
+                            context,
                             icon: Icons.animation,
                             title: 'Hiệu ứng lá bài',
                             value: s.cardAnimations,
                             onChanged: s.setCardAnimations,
                           ),
                           _switchTile(
+                            context,
                             icon: Icons.vibration,
                             title: 'Rung khi đến lượt',
                             value: s.vibrationEnabled,
                             onChanged: s.setVibrationEnabled,
+                            comingSoon: true,
                           ),
                         ],
                       ),
@@ -159,6 +192,7 @@ class SettingsScreen extends StatelessWidget {
                         'Khác',
                         [
                           _choiceTile(
+                            context,
                             icon: Icons.info_outline,
                             title: 'Phiên bản',
                             subtitle: '1.0.0',
@@ -166,22 +200,18 @@ class SettingsScreen extends StatelessWidget {
                             showChevron: false,
                           ),
                           _choiceTile(
+                            context,
                             icon: Icons.description_outlined,
                             title: 'Điều khoản sử dụng',
-                            onTap: () => _showInfo(
-                              context,
-                              'Điều khoản sử dụng',
-                              'Nội dung điều khoản sẽ được cập nhật sau.',
-                            ),
+                            onTap: () => _comingSoon(context),
+                            comingSoon: true,
                           ),
                           _choiceTile(
+                            context,
                             icon: Icons.privacy_tip_outlined,
                             title: 'Quyền riêng tư',
-                            onTap: () => _showInfo(
-                              context,
-                              'Quyền riêng tư',
-                              'Chúng tôi chỉ lưu dữ liệu cần thiết cho chơi online.',
-                            ),
+                            onTap: () => _comingSoon(context),
+                            comingSoon: true,
                           ),
                         ],
                       ),
@@ -278,22 +308,28 @@ class SettingsScreen extends StatelessWidget {
     );
   }
 
-  Widget _switchTile({
+  Widget _switchTile(
+    BuildContext context, {
     required IconData icon,
     required String title,
     required bool value,
     required ValueChanged<bool> onChanged,
     bool enabled = true,
+    bool comingSoon = false,
   }) {
     return _tileShell(
       icon: icon,
       title: title,
-      trailing: Switch(
-        value: value,
-        onChanged: enabled ? onChanged : null,
-        activeThumbColor: _accent,
-      ),
-      enabled: enabled,
+      subtitle: null,
+      trailing: comingSoon
+          ? _comingSoonBadge()
+          : Switch(
+              value: value,
+              onChanged: enabled ? onChanged : null,
+              activeThumbColor: _accent,
+            ),
+      enabled: enabled && !comingSoon,
+      onTap: comingSoon ? () => _comingSoon(context) : null,
     );
   }
 
@@ -304,11 +340,12 @@ class SettingsScreen extends StatelessWidget {
     required ValueChanged<double> onChanged,
     String? label,
     bool enabled = true,
+    bool comingSoon = false,
   }) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
       child: Opacity(
-        opacity: enabled ? 1 : 0.45,
+        opacity: enabled && !comingSoon ? 1 : 0.45,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -322,7 +359,9 @@ class SettingsScreen extends StatelessWidget {
                     style: const TextStyle(color: Colors.white, fontSize: 15),
                   ),
                 ),
-                if (label != null)
+                if (comingSoon)
+                  _comingSoonBadge()
+                else if (label != null)
                   Text(
                     label,
                     style: const TextStyle(color: Colors.white70, fontSize: 13),
@@ -331,7 +370,7 @@ class SettingsScreen extends StatelessWidget {
             ),
             Slider(
               value: value,
-              onChanged: enabled ? onChanged : null,
+              onChanged: enabled && !comingSoon ? onChanged : null,
               activeColor: _accent,
               inactiveColor: Colors.white24,
             ),
@@ -341,21 +380,46 @@ class SettingsScreen extends StatelessWidget {
     );
   }
 
-  Widget _choiceTile({
+  Widget _choiceTile(
+    BuildContext context, {
     required IconData icon,
     required String title,
     String? subtitle,
     required VoidCallback onTap,
     bool showChevron = true,
+    bool comingSoon = false,
   }) {
     return _tileShell(
       icon: icon,
       title: title,
-      subtitle: subtitle,
-      trailing: showChevron
-          ? const Icon(Icons.chevron_right, color: Colors.white38)
-          : null,
-      onTap: onTap,
+      subtitle: comingSoon ? null : subtitle,
+      trailing: comingSoon
+          ? _comingSoonBadge()
+          : showChevron
+              ? const Icon(Icons.chevron_right, color: Colors.white38)
+              : null,
+      onTap: comingSoon ? () => _comingSoon(context) : onTap,
+      enabled: !comingSoon || showChevron == false,
+    );
+  }
+
+  Widget _comingSoonBadge() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white24),
+      ),
+      child: const Text(
+        _comingSoonLabel,
+        style: TextStyle(
+          color: Colors.white54,
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.2,
+        ),
+      ),
     );
   }
 
@@ -480,21 +544,5 @@ class SettingsScreen extends StatelessWidget {
       onTap: onPick ?? () => Navigator.of(context).pop(code),
     );
   }
-
-  static void _showInfo(BuildContext context, String title, String body) {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: _card,
-        title: Text(title, style: const TextStyle(color: Colors.white)),
-        content: Text(body, style: const TextStyle(color: Colors.white70)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Đóng', style: TextStyle(color: _accent)),
-          ),
-        ],
-      ),
-    );
-  }
 }
+

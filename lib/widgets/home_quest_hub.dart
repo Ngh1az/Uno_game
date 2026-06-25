@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../daily_quests/daily_quest.dart';
@@ -12,10 +14,14 @@ class HomeQuestHub extends StatefulWidget {
     super.key,
     required this.onPlayOffline,
     required this.onPlayOnline,
+    required this.onLeaderboard,
+    required this.onFriends,
   });
 
   final VoidCallback onPlayOffline;
   final VoidCallback onPlayOnline;
+  final VoidCallback onLeaderboard;
+  final VoidCallback onFriends;
 
   @override
   State<HomeQuestHub> createState() => _HomeQuestHubState();
@@ -25,30 +31,40 @@ class _HomeQuestHubState extends State<HomeQuestHub> {
   static const _gold = Color(0xFFFFD54F);
 
   bool _dailyExpanded = true;
-  bool _weeklyExpanded = true;
+  bool _weeklyExpanded = false;
 
   bool get _bothCollapsed => !_dailyExpanded && !_weeklyExpanded;
 
-  int _maxVisibleRows(double hubHeight, bool bothOpen) {
-    if (!bothOpen) return 4;
-    if (hubHeight < 300) return 2;
-    if (hubHeight < 400) return 3;
-    return 4;
+  int _maxVisibleRows(_HubMetrics metrics, bool bothOpen, int questCount) {
+    final cap = !bothOpen
+        ? (metrics.compact ? 3 : 4)
+        : metrics.useSideBySide
+            ? 5
+            : metrics.maxHeight < 360
+                ? 1
+                : 2;
+    return math.min(cap, math.max(questCount, 1));
   }
 
-  void _toggleDaily(bool tight) {
+  double _maxQuestScrollHeight(_HubMetrics metrics, bool bothOpen) {
+    if (metrics.useSideBySide) return metrics.maxHeight;
+    if (bothOpen) return metrics.maxHeight * 0.38;
+    return double.infinity;
+  }
+
+  void _toggleDaily(_HubMetrics metrics) {
     setState(() {
       final opening = !_dailyExpanded;
       _dailyExpanded = opening;
-      if (opening && tight) _weeklyExpanded = false;
+      if (opening && metrics.singlePanelMode) _weeklyExpanded = false;
     });
   }
 
-  void _toggleWeekly(bool tight) {
+  void _toggleWeekly(_HubMetrics metrics) {
     setState(() {
       final opening = !_weeklyExpanded;
       _weeklyExpanded = opening;
-      if (opening && tight) _dailyExpanded = false;
+      if (opening && metrics.singlePanelMode) _dailyExpanded = false;
     });
   }
 
@@ -65,20 +81,25 @@ class _HomeQuestHubState extends State<HomeQuestHub> {
           ),
           child: LayoutBuilder(
             builder: (context, constraints) {
-              final tight = constraints.maxHeight < 560;
-              final gap = tight ? 6.0 : 8.0;
+              final metrics = _HubMetrics.from(constraints);
+
+              final gap = metrics.compact ? 6.0 : 8.0;
               final bothOpen = _dailyExpanded && _weeklyExpanded;
-              final maxRows = _maxVisibleRows(constraints.maxHeight, bothOpen);
+              final dailyMaxRows =
+                  _maxVisibleRows(metrics, bothOpen, store.dailyQuests.length);
+              final weeklyMaxRows =
+                  _maxVisibleRows(metrics, bothOpen, store.weeklyQuests.length);
+              final maxQuestScroll = _maxQuestScrollHeight(metrics, bothOpen);
 
               final dailyPanel = _QuestPanel(
                 title: 'NHIỆM VỤ HẰNG NGÀY',
                 icon: Icons.flag_rounded,
                 accent: _gold,
                 quests: store.dailyQuests,
-                compact: tight,
+                compact: metrics.compact,
                 expanded: _dailyExpanded,
-                maxVisibleRows: maxRows,
-                onToggle: () => _toggleDaily(tight),
+                maxVisibleRows: dailyMaxRows,
+                onToggle: () => _toggleDaily(metrics),
                 onClaim: (id) => _claim(context, id),
               );
               final weeklyPanel = _QuestPanel(
@@ -86,10 +107,10 @@ class _HomeQuestHubState extends State<HomeQuestHub> {
                 icon: Icons.date_range_rounded,
                 accent: const Color(0xFF90CAF9),
                 quests: store.weeklyQuests,
-                compact: tight,
+                compact: metrics.compact,
                 expanded: _weeklyExpanded,
-                maxVisibleRows: maxRows,
-                onToggle: () => _toggleWeekly(tight),
+                maxVisibleRows: weeklyMaxRows,
+                onToggle: () => _toggleWeekly(metrics),
                 onClaim: (id) => _claim(context, id),
               );
 
@@ -103,33 +124,77 @@ class _HomeQuestHubState extends State<HomeQuestHub> {
                 ],
               );
 
+              final playMenu = HomePlayMenu(
+                includePadding: false,
+                onPlayOffline: widget.onPlayOffline,
+                onPlayOnline: widget.onPlayOnline,
+                onLeaderboard: widget.onLeaderboard,
+                onFriends: widget.onFriends,
+              );
+
+              Widget questSection(Widget child) {
+                if (metrics.useSideBySide) {
+                  return SingleChildScrollView(
+                    physics: const ClampingScrollPhysics(),
+                    child: child,
+                  );
+                }
+                return ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: maxQuestScroll),
+                  child: SingleChildScrollView(
+                    physics: const ClampingScrollPhysics(),
+                    child: child,
+                  ),
+                );
+              }
+
+              if (metrics.useSideBySide) {
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(
+                      flex: 3,
+                      child: _bothCollapsed
+                          ? Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                dailyPanel,
+                                SizedBox(height: gap),
+                                weeklyPanel,
+                              ],
+                            )
+                          : questSection(questBody),
+                    ),
+                    SizedBox(width: gap + 4),
+                    Expanded(
+                      flex: 2,
+                      child: Center(child: playMenu),
+                    ),
+                  ],
+                );
+              }
+
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Expanded(
-                    child: _bothCollapsed
-                        ? Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              dailyPanel,
-                              SizedBox(height: gap),
-                              weeklyPanel,
-                            ],
-                          )
-                        : SingleChildScrollView(
-                            physics: const ClampingScrollPhysics(),
-                            child: questBody,
-                          ),
-                  ),
-                  SizedBox(height: gap),
-                  HomePlayMenu(
-                    includePadding: false,
-                    compact: true,
-                    onPlayOffline: widget.onPlayOffline,
-                    onPlayOnline: widget.onPlayOnline,
-                  ),
-                  SizedBox(height: tight ? 2 : 6),
+                  if (_bothCollapsed)
+                    Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        dailyPanel,
+                        SizedBox(height: gap),
+                        weeklyPanel,
+                      ],
+                    )
+                  else if (bothOpen)
+                    questSection(questBody)
+                  else
+                    questBody,
+                  SizedBox(height: metrics.compact ? 10 : 14),
+                  playMenu,
+                  const Spacer(),
                 ],
               );
             },
@@ -160,6 +225,46 @@ class _HomeQuestHubState extends State<HomeQuestHub> {
   }
 }
 
+class _HubMetrics {
+  const _HubMetrics({
+    required this.maxWidth,
+    required this.maxHeight,
+    required this.compact,
+    required this.wide,
+    required this.singlePanelMode,
+    required this.useSideBySide,
+  });
+
+  final double maxWidth;
+  final double maxHeight;
+  final bool compact;
+  final bool wide;
+  final bool singlePanelMode;
+  final bool useSideBySide;
+
+  factory _HubMetrics.from(BoxConstraints constraints) {
+    final maxWidth = constraints.maxWidth;
+    final maxHeight = constraints.maxHeight;
+    final compact = HomeLayout.isCompactHub(
+      maxWidth: maxWidth,
+      maxHeight: maxHeight,
+    );
+    final wide = HomeLayout.isWideBox(maxWidth);
+    final short = HomeLayout.isShortHub(maxHeight);
+    final singlePanelMode = !wide || short || compact;
+    final useSideBySide = wide && maxHeight >= 400;
+
+    return _HubMetrics(
+      maxWidth: maxWidth,
+      maxHeight: maxHeight,
+      compact: compact,
+      wide: wide,
+      singlePanelMode: singlePanelMode,
+      useSideBySide: useSideBySide,
+    );
+  }
+}
+
 class _QuestPanel extends StatelessWidget {
   const _QuestPanel({
     required this.title,
@@ -184,7 +289,7 @@ class _QuestPanel extends StatelessWidget {
   final VoidCallback onToggle;
   final ValueChanged<String> onClaim;
 
-  double _rowHeight() => compact ? 40.0 : 44.0;
+  double _rowHeight() => compact ? 42.0 : 48.0;
 
   double _rowGap() => compact ? 6.0 : 8.0;
 
@@ -200,8 +305,9 @@ class _QuestPanel extends StatelessWidget {
     final contentH = quests.isEmpty
         ? 0.0
         : quests.length * _rowHeight() + (quests.length - 1) * _rowGap();
-    final listH = contentH.clamp(0.0, _listMaxHeight());
-    final needsScroll = contentH > _listMaxHeight() + 0.5;
+    final cap = _listMaxHeight();
+    final needsScroll = contentH > cap + 0.5;
+    final listH = needsScroll ? cap : contentH;
     final claimable = quests.where((q) => q.canClaim).length;
 
     return DecoratedBox(
@@ -326,11 +432,19 @@ class _QuestRow extends StatelessWidget {
   final bool compact;
   final VoidCallback onClaim;
 
+  static const _progressTextStyle = TextStyle(
+    color: Color(0xFFECEFF1),
+    fontSize: 12,
+    fontWeight: FontWeight.w700,
+    shadows: [Shadow(color: Color(0x88000000), blurRadius: 2)],
+  );
+
   @override
   Widget build(BuildContext context) {
     final done = quest.isComplete;
     final claimed = quest.claimed;
     final progress = quest.progress / quest.target;
+    final hasProgress = quest.progress > 0;
     final fontSize = compact ? 12.0 : 13.0;
 
     return Row(
@@ -363,10 +477,16 @@ class _QuestRow extends StatelessWidget {
               ClipRRect(
                 borderRadius: BorderRadius.circular(3),
                 child: LinearProgressIndicator(
-                  value: progress,
+                  value: progress.clamp(0.0, 1.0),
                   minHeight: compact ? 4 : 5,
-                  backgroundColor: const Color(0x28FFFFFF),
-                  color: claimed ? Colors.white24 : const Color(0xFFFFC400),
+                  backgroundColor: hasProgress
+                      ? const Color(0x28FFFFFF)
+                      : const Color(0x38FFC400),
+                  color: claimed
+                      ? Colors.white24
+                      : hasProgress || done
+                          ? const Color(0xFFFFC400)
+                          : Colors.transparent,
                 ),
               ),
             ],
@@ -380,7 +500,7 @@ class _QuestRow extends StatelessWidget {
         else
           Text(
             '${quest.progress}/${quest.target}',
-            style: const TextStyle(color: Colors.white54, fontSize: 12),
+            style: _progressTextStyle,
           ),
       ],
     );
@@ -395,20 +515,23 @@ class _ClaimChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: const Color(0xFFFFC400),
-      borderRadius: BorderRadius.circular(10),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(10),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-          child: Text(
-            label,
-            style: const TextStyle(
-              color: Color(0xFF2A0707),
-              fontSize: 12,
-              fontWeight: FontWeight.w800,
+    return SizedBox(
+      width: 48,
+      height: 44,
+      child: Material(
+        color: const Color(0xFFFFC400),
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(12),
+          child: Center(
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: Color(0xFF2A0707),
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+              ),
             ),
           ),
         ),

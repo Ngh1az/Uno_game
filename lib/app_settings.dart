@@ -1,4 +1,7 @@
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'game/game_limits.dart';
 
 enum BotSpeed { slow, normal, fast }
 
@@ -7,6 +10,14 @@ class AppSettings extends ChangeNotifier {
   AppSettings._();
 
   static final AppSettings instance = AppSettings._();
+
+  static const _keyShowPlayableHints = 'showPlayableHints';
+  static const _keyAutoUnoCall = 'autoUnoCall';
+  static const _keyCardAnimations = 'cardAnimations';
+  static const _keyDefaultBotCount = 'defaultBotCount';
+  static const _keyBotSpeed = 'botSpeed';
+
+  bool _loaded = false;
 
   // Âm thanh
   bool soundEnabled = true;
@@ -39,6 +50,34 @@ class AppSettings extends ChangeNotifier {
     BotSpeed.normal => 'Bình thường',
     BotSpeed.fast => 'Nhanh',
   };
+
+  Future<void> load() async {
+    if (_loaded) return;
+    final prefs = await SharedPreferences.getInstance();
+    showPlayableHints = prefs.getBool(_keyShowPlayableHints) ?? showPlayableHints;
+    autoUnoCall = prefs.getBool(_keyAutoUnoCall) ?? autoUnoCall;
+    cardAnimations = prefs.getBool(_keyCardAnimations) ?? cardAnimations;
+    defaultBotCount = prefs.getInt(_keyDefaultBotCount) ?? defaultBotCount;
+    final speedName = prefs.getString(_keyBotSpeed);
+    if (speedName != null) {
+      botSpeed = BotSpeed.values.firstWhere(
+        (s) => s.name == speedName,
+        orElse: () => botSpeed,
+      );
+    }
+    defaultBotCount = defaultBotCount.clamp(GameLimits.minBots, GameLimits.maxBots);
+    _loaded = true;
+    notifyListeners();
+  }
+
+  Future<void> _persistGameSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyShowPlayableHints, showPlayableHints);
+    await prefs.setBool(_keyAutoUnoCall, autoUnoCall);
+    await prefs.setBool(_keyCardAnimations, cardAnimations);
+    await prefs.setInt(_keyDefaultBotCount, defaultBotCount);
+    await prefs.setString(_keyBotSpeed, botSpeed.name);
+  }
 
   void setSoundEnabled(bool value) {
     if (soundEnabled == value) return;
@@ -90,34 +129,39 @@ class AppSettings extends ChangeNotifier {
   }
 
   void setDefaultBotCount(int value) {
-    final v = value.clamp(1, 5);
+    final v = value.clamp(GameLimits.minBots, GameLimits.maxBots);
     if (defaultBotCount == v) return;
     defaultBotCount = v;
     notifyListeners();
+    _persistGameSettings();
   }
 
   void setBotSpeed(BotSpeed value) {
     if (botSpeed == value) return;
     botSpeed = value;
     notifyListeners();
+    _persistGameSettings();
   }
 
   void setShowPlayableHints(bool value) {
     if (showPlayableHints == value) return;
     showPlayableHints = value;
     notifyListeners();
+    _persistGameSettings();
   }
 
   void setAutoUnoCall(bool value) {
     if (autoUnoCall == value) return;
     autoUnoCall = value;
     notifyListeners();
+    _persistGameSettings();
   }
 
   void setCardAnimations(bool value) {
     if (cardAnimations == value) return;
     cardAnimations = value;
     notifyListeners();
+    _persistGameSettings();
   }
 
   void setVibrationEnabled(bool value) {

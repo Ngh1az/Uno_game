@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
 
-/// Nút menu lớn phong cách UNO — pill, gradient, responsive.
+/// Nút menu pill phong cách UNO — có chế độ gọn cho Home.
 class MenuActionButton extends StatelessWidget {
   final IconData icon;
   final String title;
   final String? subtitle;
   final Color color;
   final VoidCallback? onTap;
+  final bool compact;
 
   const MenuActionButton({
     super.key,
@@ -15,11 +16,12 @@ class MenuActionButton extends StatelessWidget {
     this.subtitle,
     required this.color,
     this.onTap,
+    this.compact = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    final m = _Metrics.of(context);
+    final m = _Metrics.of(context, compact: compact);
 
     return Material(
       color: Colors.transparent,
@@ -41,13 +43,13 @@ class MenuActionButton extends StatelessWidget {
             ),
             border: Border.all(
               color: const Color(0xFFFFD54F).withValues(alpha: 0.45),
-              width: 1.5,
+              width: compact ? 1.2 : 1.5,
             ),
             boxShadow: [
               BoxShadow(
-                color: color.withValues(alpha: 0.4),
-                blurRadius: 12,
-                offset: const Offset(0, 5),
+                color: color.withValues(alpha: 0.35),
+                blurRadius: compact ? 8 : 12,
+                offset: Offset(0, compact ? 3 : 5),
               ),
               const BoxShadow(
                 color: Color(0x44000000),
@@ -177,13 +179,27 @@ class _Metrics {
     required this.chevronSize,
   });
 
-  factory _Metrics.of(BuildContext context) {
+  factory _Metrics.of(BuildContext context, {bool compact = false}) {
     final h = MediaQuery.sizeOf(context).height;
-    final scale = (h / 760).clamp(0.82, 1.12);
+    final scale = (h / 760).clamp(0.82, 1.08);
+
+    if (compact) {
+      final height = (52 * scale).clamp(46.0, 56.0);
+      return _Metrics(
+        height: height,
+        radius: height / 2,
+        padH: 14,
+        gap: 10,
+        iconBox: 36,
+        iconSize: 20,
+        titleSize: 15,
+        subtitleSize: 11,
+        subtitleGap: 2,
+        chevronSize: 14,
+      );
+    }
 
     final height = (72 * scale).clamp(62.0, 84.0);
-    final titleSize = (18.5 * scale).clamp(16.0, 21.0);
-
     return _Metrics(
       height: height,
       radius: height / 2,
@@ -191,7 +207,7 @@ class _Metrics {
       gap: (16 * scale).clamp(12.0, 20.0),
       iconBox: (50 * scale).clamp(44.0, 56.0),
       iconSize: (28 * scale).clamp(24.0, 32.0),
-      titleSize: titleSize,
+      titleSize: (18.5 * scale).clamp(16.0, 21.0),
       subtitleSize: (12.5 * scale).clamp(11.0, 14.0),
       subtitleGap: 2,
       chevronSize: (16 * scale).clamp(14.0, 18.0),

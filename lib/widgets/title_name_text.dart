@@ -336,6 +336,7 @@ class TitleNamePlain extends StatelessWidget {
     required this.accent,
     this.fontSize = 16,
     this.shimmer = false,
+    this.letterSpacing = 0,
   });
 
   final String name;
@@ -343,6 +344,7 @@ class TitleNamePlain extends StatelessWidget {
   final Color accent;
   final double fontSize;
   final bool shimmer;
+  final double letterSpacing;
 
   @override
   Widget build(BuildContext context) {
@@ -357,6 +359,7 @@ class TitleNamePlain extends StatelessWidget {
       ),
       fontSize: fontSize,
       shimmer: shimmer,
+      letterSpacing: letterSpacing,
     );
   }
 }

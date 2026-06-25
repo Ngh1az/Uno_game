@@ -97,37 +97,12 @@ abstract final class TitleTierTheme {
 
     switch (def.tier) {
       case TitleTier.starter:
-        return DecoratedBox(
-          decoration: BoxDecoration(
-            color: unlocked
-                ? def.color.withValues(alpha: 0.1)
-                : const Color(0x882A0707),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: equipped
-                  ? equippedGold
-                  : unlocked
-                      ? def.color.withValues(alpha: 0.35)
-                      : Colors.white12,
-            ),
-          ),
-          child: IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Container(
-                  width: 4,
-                  decoration: BoxDecoration(
-                    color: def.color.withValues(alpha: unlocked ? 0.8 : 0.25),
-                    borderRadius: const BorderRadius.horizontal(
-                      left: Radius.circular(12),
-                    ),
-                  ),
-                ),
-                Expanded(child: child),
-              ],
-            ),
-          ),
+      case TitleTier.achievement:
+        return _softTierCardShell(
+          def: def,
+          unlocked: unlocked,
+          equipped: equipped,
+          child: child,
         );
 
       case TitleTier.shop:
@@ -165,44 +140,6 @@ abstract final class TitleTierTheme {
                 : null,
           ),
           child: child,
-        );
-
-      case TitleTier.achievement:
-        return DecoratedBox(
-          decoration: BoxDecoration(
-            color: const Color(0x882A0707),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-              color: equipped
-                  ? equippedGold
-                  : def.color.withValues(alpha: unlocked ? 0.55 : 0.2),
-              width: equipped ? 2 : 1,
-            ),
-          ),
-          child: IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Container(
-                  width: 6,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        def.color,
-                        def.color.withValues(alpha: 0.35),
-                      ],
-                    ),
-                    borderRadius: const BorderRadius.horizontal(
-                      left: Radius.circular(14),
-                    ),
-                  ),
-                ),
-                Expanded(child: child),
-              ],
-            ),
-          ),
         );
 
       case TitleTier.elite:
@@ -254,17 +191,86 @@ abstract final class TitleTierTheme {
     }
   }
 
+  /// Tập sự & Cày cuốc — cùng họ khung với Mua xu, nhưng nhẹ hơn Boss/Mua xu.
+  static Widget _softTierCardShell({
+    required TitleDefinition def,
+    required bool unlocked,
+    required bool equipped,
+    required Widget child,
+  }) {
+    const equippedGold = Color(0xFFFFC400);
+    const radius = 14.0;
+    final tierAccent = sectionAccent(def.tier);
+    final depthColor = def.tier == TitleTier.starter
+        ? const Color(0xFF142018)
+        : const Color(0xFF101828);
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(radius),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: unlocked
+              ? [
+                  tierAccent.withValues(alpha: 0.14),
+                  depthColor,
+                  const Color(0xFF1A0505),
+                ]
+              : [
+                  tierAccent.withValues(alpha: 0.06),
+                  const Color(0x882A0707),
+                ],
+        ),
+        border: Border.all(
+          color: equipped
+              ? equippedGold
+              : tierAccent.withValues(alpha: unlocked ? 0.48 : 0.28),
+          width: equipped ? 2 : 1.25,
+        ),
+        boxShadow: equipped
+            ? [
+                BoxShadow(
+                  color: equippedGold.withValues(alpha: 0.2),
+                  blurRadius: 10,
+                  offset: const Offset(0, 2),
+                ),
+              ]
+            : unlocked
+                ? [
+                    BoxShadow(
+                      color: tierAccent.withValues(alpha: 0.1),
+                      blurRadius: 6,
+                      offset: const Offset(0, 2),
+                    ),
+                  ]
+                : null,
+      ),
+      child: child,
+    );
+  }
+
   static Widget iconFrame({
     required TitleDefinition def,
     required bool unlocked,
   }) {
-    final shape = def.tier == TitleTier.shop
-        ? BorderRadius.circular(10)
-        : BorderRadius.circular(def.tier == TitleTier.elite ? 14 : 999);
+    final tierAccent = sectionAccent(def.tier);
+    final isElite = def.tier == TitleTier.elite;
+    final shape = BorderRadius.circular(isElite ? 14 : 10);
+    final size = isElite ? 48.0 : 42.0;
+    final iconSize = isElite ? 24.0 : 22.0;
+
+    final borderColor = switch (def.tier) {
+      TitleTier.elite when unlocked => tierAccent,
+      TitleTier.shop when unlocked => def.color.withValues(alpha: 0.75),
+      TitleTier.starter || TitleTier.achievement when unlocked =>
+        tierAccent.withValues(alpha: 0.62),
+      _ => def.color.withValues(alpha: unlocked ? 0.75 : 0.25),
+    };
 
     return Container(
-      width: def.tier == TitleTier.elite ? 48 : 42,
-      height: def.tier == TitleTier.elite ? 48 : 42,
+      width: size,
+      height: size,
       decoration: BoxDecoration(
         borderRadius: shape,
         gradient: unlocked
@@ -277,12 +283,10 @@ abstract final class TitleTierTheme {
             : null,
         color: unlocked ? null : def.color.withValues(alpha: 0.1),
         border: Border.all(
-          color: def.tier == TitleTier.elite && unlocked
-              ? sectionAccent(def.tier)
-              : def.color.withValues(alpha: unlocked ? 0.75 : 0.25),
-          width: def.tier == TitleTier.elite ? 2 : 1,
+          color: borderColor,
+          width: isElite ? 2 : 1,
         ),
-        boxShadow: def.tier == TitleTier.elite && unlocked
+        boxShadow: isElite && unlocked
             ? [
                 BoxShadow(
                   color: def.color.withValues(alpha: 0.45),
@@ -294,7 +298,7 @@ abstract final class TitleTierTheme {
       child: Icon(
         unlocked ? def.icon : Icons.lock_outline_rounded,
         color: unlocked ? Colors.white : Colors.white38,
-        size: def.tier == TitleTier.elite ? 24 : 22,
+        size: iconSize,
       ),
     );
   }

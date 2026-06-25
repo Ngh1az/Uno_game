@@ -17,10 +17,12 @@ abstract final class AppSnack {
     Widget? trailing,
     Duration duration = const Duration(milliseconds: 2000),
     bool isError = false,
+    double? bottomMargin,
   }) {
     final color = accent ?? (isError ? errorRed : gold);
     final leading = icon ??
         (isError ? Icons.error_outline_rounded : Icons.check_circle_rounded);
+    final marginBottom = bottomMargin ?? 18.0;
 
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
@@ -30,7 +32,7 @@ abstract final class AppSnack {
           backgroundColor: Colors.transparent,
           elevation: 0,
           behavior: SnackBarBehavior.floating,
-          margin: const EdgeInsets.fromLTRB(16, 0, 16, 18),
+          margin: EdgeInsets.fromLTRB(16, 0, 16, marginBottom),
           padding: EdgeInsets.zero,
           content: _SnackCard(
             accent: color,
@@ -87,6 +89,7 @@ abstract final class AppSnack {
     String? detail,
     IconData icon = Icons.info_outline_rounded,
     Duration duration = const Duration(milliseconds: 1800),
+    double? bottomMargin,
   }) {
     show(
       context,
@@ -95,7 +98,30 @@ abstract final class AppSnack {
       accent: infoBlue,
       icon: icon,
       duration: duration,
+      bottomMargin: bottomMargin,
     );
+  }
+
+  /// Thông báo trong ván — đặt cao hơn, không che tay bài.
+  static void gameEvent(
+    BuildContext context,
+    String message, {
+    IconData icon = Icons.info_outline_rounded,
+    Duration duration = const Duration(milliseconds: 1500),
+  }) {
+    info(
+      context,
+      message,
+      icon: icon,
+      duration: duration,
+      bottomMargin: _gameEventBottomMargin(context),
+    );
+  }
+
+  static double _gameEventBottomMargin(BuildContext context) {
+    final h = MediaQuery.sizeOf(context).height;
+    final pad = MediaQuery.paddingOf(context).bottom;
+    return (h * 0.34).clamp(190.0, 280.0) + pad;
   }
 
   static void warning(

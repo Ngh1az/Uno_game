@@ -1,9 +1,11 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../daily_quests/daily_quest_store.dart';
+import '../user/cloud_progress_service.dart';
 import '../user/user_session.dart';
 import 'title_definition.dart';
 
@@ -53,10 +55,34 @@ class TitleStore extends ChangeNotifier {
 
   int get unlockedCount => unlockedIds.length;
 
+  Set<String> get seenUnlockIds => _seenUnlockIds;
+
   int get newUnlockCount =>
       unlockedIds.where((id) => !_seenUnlockIds.contains(id)).length;
 
   bool isUnlocked(String id) => unlockedIds.contains(id);
+
+  bool isUnlockNew(String id) =>
+      isUnlocked(id) && !_seenUnlockIds.contains(id);
+
+  void markUnlockSeen(String id) {
+    if (!isUnlocked(id) || !_seenUnlockIds.add(id)) return;
+    notifyListeners();
+    _save();
+  }
+
+  void markTierUnlocksSeen(TitleTier tier) {
+    var changed = false;
+    for (final def in catalog.where((t) => t.tier == tier)) {
+      if (isUnlockNew(def.id)) {
+        _seenUnlockIds.add(def.id);
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    notifyListeners();
+    _save();
+  }
 
   int statValue(TitleStatType stat) {
     switch (stat) {
@@ -143,13 +169,23 @@ class TitleStore extends ChangeNotifier {
   }
 
   Future<void> unlockAllTitles() async {
+    if (!kDebugMode) return;
     if (!_loaded) return;
     unlockedIds.addAll(catalog.map((t) => t.id));
     notifyListeners();
     await _save();
   }
 
-  Future<void> _save() async {
+  Future<void> persistFromCloudMerge() async {
+    if (!_loaded) return;
+    notifyListeners();
+    await _save(pushCloud: false);
+    if (UserSession.syncsToCloud) {
+      await CloudProgressService.instance.pushTitles(_uid);
+    }
+  }
+
+  Future<void> _save({bool pushCloud = true}) async {
     if (!_canWrite) return;
     final prefs = await SharedPreferences.getInstance();
     final prefix = 'titles_$_uid';
@@ -173,6 +209,10 @@ class TitleStore extends ChangeNotifier {
       '$prefix.seen',
       jsonEncode(_seenUnlockIds.toList()),
     );
+
+    if (pushCloud && UserSession.syncsToCloud) {
+      await CloudProgressService.instance.pushTitles(_uid);
+    }
   }
 
   void markAllUnlocksSeen() {

@@ -20,6 +20,8 @@ class InvalidMoveException implements Exception {
 
 /// Engine luật chơi UNO (chạy offline, thuần logic, dễ test và serialize).
 ///
+/// House rule: +2/+4 có thể cộng dồn — dùng [pendingDrawCount], [acceptDrawStack].
+///
 /// Quy ước lượt chơi:
 /// - Đến lượt: người chơi gọi [playCard] HOẶC [drawCard].
 /// - [drawCard] rút đúng 1 lá. Nếu lá rút được có thể đánh, lượt vẫn ở người đó
@@ -42,6 +44,15 @@ class GameState {
   /// Đã rút bài trong lượt hiện tại hay chưa (mỗi lượt chỉ được rút 1 lần).
   bool drawnThisTurn;
 
+  /// Số lá phải rút do chuỗi +2/+4 (luật cộng dồn — house rule).
+  int pendingDrawCount;
+
+  /// Người chơi đã hô UNO (khi còn 2 lá trước khi đánh, hoặc khi vừa xuống còn 1 lá).
+  final Set<String> unoDeclaredBeforePlay;
+
+  /// Người chơi còn 1 lá nhưng quên hô UNO — đối thủ có thể bắt lỗi.
+  String? catchableUnoPlayerId;
+
   /// Nhật ký các sự kiện (tiếng Việt) để hiển thị lên UI.
   final List<String> log;
 
@@ -57,10 +68,18 @@ class GameState {
     required this.status,
     this.winnerId,
     this.drawnThisTurn = false,
+    this.pendingDrawCount = 0,
+    Set<String>? unoDeclaredBeforePlay,
+    this.catchableUnoPlayerId,
     List<String>? log,
     Random? random,
-  }) : log = log ?? <String>[],
+  }) : unoDeclaredBeforePlay = unoDeclaredBeforePlay ?? <String>{},
+       log = log ?? <String>[],
        _random = random ?? Random();
+
+  bool hasDeclaredUno(String playerId) => unoDeclaredBeforePlay.contains(playerId);
+
+  bool get mustRespondToDrawStack => pendingDrawCount > 0;
 
   /// Lá trên cùng của đống bài đã đánh.
   UnoCard get topCard => discardPile.last;
@@ -119,43 +138,130 @@ class GameState {
           orElse: () => throw InvalidMoveException('Không có người chơi $id'));
 
   /// Một lá có đánh được lên lá trên cùng (theo màu đang hiệu lực) hay không.
-  bool canPlay(UnoCard card) => card.canPlayOn(topCard, activeColor);
+  bool canPlay(UnoCard card) {
+    if (pendingDrawCount > 0) {
+      return card.type == CardType.drawTwo ||
+          card.type == CardType.wildDrawFour;
+    }
+    return card.canPlayOn(topCard, activeColor);
+  }
 
   /// Các lá trong tay [player] có thể đánh được.
   List<UnoCard> playableCards(UnoPlayer player) =>
       player.hand.where(canPlay).toList();
 
-  /// Đánh một lá bài.
-  /// [chosenColor] bắt buộc khi đánh lá Wild / Wild +4.
-  void playCard(String playerId, UnoCard card, {CardColor? chosenColor}) {
+  /// Hô "UNO!" khi sắp đánh lá áp chót (còn 2 lá) hoặc ngay sau khi xuống còn 1 lá.
+  void callUno(String playerId) {
     _ensurePlaying();
     _ensureTurn(playerId);
+    final player = currentPlayer;
+    if (player.hand.length != 2 && player.hand.length != 1) {
+      throw InvalidMoveException('Chỉ hô UNO khi còn 1–2 lá.');
+    }
+    if (player.hand.length == 1 && catchableUnoPlayerId == playerId) {
+      throw InvalidMoveException('Đã quá muộn — đối thủ có thể bắt lỗi.');
+    }
+    unoDeclaredBeforePlay.add(playerId);
+    log.add('${player.name} hô UNO!');
+  }
+
+  /// Bắt lỗi quên hô UNO — đối thủ rút thêm 2 lá.
+  void catchUno(String catcherId, String targetId) {
+    _ensurePlaying();
+    if (catchableUnoPlayerId != targetId) {
+      throw InvalidMoveException('Không thể bắt lỗi UNO lúc này.');
+    }
+    if (catcherId == targetId) {
+      throw InvalidMoveException('Không thể tự bắt lỗi UNO của chính mình.');
+    }
+    final target = playerById(targetId);
+    final catcher = playerById(catcherId);
+    final drawn = _drawCards(2);
+    target.hand.addAll(drawn);
+    catchableUnoPlayerId = null;
+    log.add('${catcher.name} bắt ${target.name} quên UNO — rút 2 lá.');
+  }
+
+  /// Nhận toàn bộ lá tích lũy từ chuỗi +2/+4 rồi mất lượt.
+  void acceptDrawStack(String playerId) {
+    _ensurePlaying();
+    _ensureTurn(playerId);
+    _expireUnoCatchWindow(playerId);
+    if (pendingDrawCount <= 0) {
+      throw InvalidMoveException('Không có chuỗi +2/+4 đang chờ.');
+    }
 
     final player = currentPlayer;
-    final index = player.hand.indexOf(card);
+    final count = pendingDrawCount;
+    pendingDrawCount = 0;
+    drawnThisTurn = false;
+    final drawn = _drawCards(count);
+    player.hand.addAll(drawn);
+    log.add('${player.name} nhận $count lá từ chuỗi +2/+4.');
+    _advance(1);
+    if (status == GameStatus.playing) {
+      log.add('Tới lượt ${currentPlayer.name}.');
+    }
+  }
+
+  /// Đánh một lá bài.
+  /// [declaredUno] true khi người chơi hô UNO cùng lúc đánh lá áp chót (2 → 1 lá).
+  /// [chosenColor] bắt buộc khi đánh lá Wild / Wild +4.
+  /// [handIndex] dùng khi có nhiều lá trùng màu/loại trong tay.
+  void playCard(
+    String playerId,
+    UnoCard card, {
+    CardColor? chosenColor,
+    int? handIndex,
+    bool declaredUno = false,
+  }) {
+    _ensurePlaying();
+    _ensureTurn(playerId);
+    _expireUnoCatchWindow(playerId);
+
+    final player = currentPlayer;
+    final handBefore = player.hand.length;
+    final index = _resolveHandIndex(player.hand, card, handIndex: handIndex);
     if (index < 0) {
       throw InvalidMoveException('${player.name} không có lá ${card.label}');
     }
-    if (!canPlay(card)) {
+    final handCard = player.hand[index];
+    if (pendingDrawCount > 0) {
+      if (handCard.type != CardType.drawTwo &&
+          handCard.type != CardType.wildDrawFour) {
+        throw InvalidMoveException(
+          'Phải đánh +2/+4 hoặc nhận $pendingDrawCount lá.',
+        );
+      }
+    } else if (!canPlay(handCard)) {
       throw InvalidMoveException(
-        'Không thể đánh ${card.label} lên ${topCard.label} '
+        'Không thể đánh ${handCard.label} lên ${topCard.label} '
         '(màu hiệu lực: ${activeColor.name})',
       );
     }
-    if (card.isWild) {
+    if (handCard.isWild) {
       if (chosenColor == null || chosenColor == CardColor.wild) {
-        throw InvalidMoveException('Phải chọn màu khi đánh lá ${card.label}');
+        throw InvalidMoveException('Phải chọn màu khi đánh lá ${handCard.label}');
       }
     }
 
     // Bỏ lá khỏi tay, đẩy lên đống đã đánh.
     player.hand.removeAt(index);
-    discardPile.add(card);
-    activeColor = card.isWild ? chosenColor! : card.color;
+    discardPile.add(handCard);
+    activeColor = handCard.isWild ? chosenColor! : handCard.color;
     drawnThisTurn = false;
 
-    final colorNote = card.isWild ? ' (chọn ${chosenColor!.name})' : '';
-    log.add('${player.name} đánh ${card.label}$colorNote.');
+    final colorNote = handCard.isWild ? ' (chọn ${chosenColor!.name})' : '';
+    log.add('${player.name} đánh ${handCard.label}$colorNote.');
+
+    if (handBefore == 2 && player.hand.length == 1) {
+      final declared =
+          declaredUno || unoDeclaredBeforePlay.remove(playerId);
+      if (!declared) {
+        catchableUnoPlayerId = playerId;
+        log.add('${player.name} quên hô UNO!');
+      }
+    }
 
     // Kiểm tra thắng.
     if (player.hasWon) {
@@ -164,11 +270,32 @@ class GameState {
       log.add('🎉 ${player.name} đã hết bài và THẮNG!');
       return;
     }
-    if (player.hasUno) {
-      log.add('${player.name} hô UNO!');
-    }
 
-    _applyEffectAndAdvance(card);
+    _applyEffectAndAdvance(handCard);
+  }
+
+  /// Tìm vị trí lá trong tay — ưu tiên cùng instance, rồi index gợi ý.
+  static int _resolveHandIndex(
+    List<UnoCard> hand,
+    UnoCard card, {
+    int? handIndex,
+  }) {
+    if (handIndex != null && handIndex >= 0 && handIndex < hand.length) {
+      final at = hand[handIndex];
+      if (identical(at, card) || at == card) return handIndex;
+    }
+    final byIdentity = hand.indexWhere((c) => identical(c, card));
+    if (byIdentity >= 0) return byIdentity;
+
+    final matches = <int>[];
+    for (var i = 0; i < hand.length; i++) {
+      if (hand[i] == card) matches.add(i);
+    }
+    if (matches.isEmpty) return -1;
+    if (matches.length == 1) return matches.first;
+    throw InvalidMoveException(
+      'Có ${matches.length} lá ${card.label} — hãy chọn đúng lá trong tay.',
+    );
   }
 
   /// Rút 1 lá từ chồng bài. Trả về lá vừa rút.
@@ -176,6 +303,12 @@ class GameState {
   UnoCard drawCard(String playerId) {
     _ensurePlaying();
     _ensureTurn(playerId);
+    _expireUnoCatchWindow(playerId);
+    if (pendingDrawCount > 0) {
+      throw InvalidMoveException(
+        'Phải đánh +2/+4 hoặc chạm chồng bài để nhận $pendingDrawCount lá.',
+      );
+    }
     if (drawnThisTurn) {
       throw InvalidMoveException(
         'Đã rút bài trong lượt này; hãy đánh lá rút được hoặc kết thúc lượt.',
@@ -187,6 +320,9 @@ class GameState {
     player.hand.add(drawn);
     drawnThisTurn = true;
     log.add('${player.name} rút 1 lá.');
+    if (player.hand.length > 2) {
+      unoDeclaredBeforePlay.remove(playerId);
+    }
 
     if (!canPlay(drawn)) {
       log.add('${player.name} không có lá đánh được, qua lượt.');
@@ -200,6 +336,12 @@ class GameState {
   void endTurn(String playerId) {
     _ensurePlaying();
     _ensureTurn(playerId);
+    _expireUnoCatchWindow(playerId);
+    if (pendingDrawCount > 0) {
+      throw InvalidMoveException(
+        'Phải đánh +2/+4 hoặc nhận $pendingDrawCount lá.',
+      );
+    }
     if (!drawnThisTurn) {
       throw InvalidMoveException(
         'Phải rút bài trước khi kết thúc lượt nếu không đánh được lá nào.',
@@ -232,18 +374,14 @@ class GameState {
         _advance(players.length == 2 ? 2 : 1);
         break;
       case CardType.drawTwo:
-        final target = players[_peek(1)];
-        final drawn = _drawCards(2);
-        target.hand.addAll(drawn);
-        log.add('${target.name} bốc 2 lá và mất lượt.');
-        _advance(2);
+        pendingDrawCount += 2;
+        log.add('Chuỗi +2/+4: tổng $pendingDrawCount lá.');
+        _advance(1);
         break;
       case CardType.wildDrawFour:
-        final target = players[_peek(1)];
-        final drawn = _drawCards(4);
-        target.hand.addAll(drawn);
-        log.add('${target.name} bốc 4 lá và mất lượt.');
-        _advance(2);
+        pendingDrawCount += 4;
+        log.add('Chuỗi +2/+4: tổng $pendingDrawCount lá.');
+        _advance(1);
         break;
     }
     if (status == GameStatus.playing) {
@@ -282,6 +420,28 @@ class GameState {
     return ((currentPlayerIndex + dir * steps) % n + n) % n;
   }
 
+  /// Chỉ số người chơi cách [fromIndex] [steps] bước theo chiều hiện tại.
+  int _peekFromIndex(int fromIndex, int steps) {
+    final n = players.length;
+    final dir = direction == PlayDirection.clockwise ? 1 : -1;
+    return ((fromIndex + dir * steps) % n + n) % n;
+  }
+
+  /// Hết cửa bắt UNO khi người kế tiếp bắt đầu lượt (rút hoặc đánh).
+  void _expireUnoCatchWindow(String actingPlayerId) {
+    if (catchableUnoPlayerId == null) return;
+    final catchableIdx =
+        players.indexWhere((p) => p.id == catchableUnoPlayerId);
+    if (catchableIdx < 0) {
+      catchableUnoPlayerId = null;
+      return;
+    }
+    final nextIdx = _peekFromIndex(catchableIdx, 1);
+    if (players[nextIdx].id == actingPlayerId) {
+      catchableUnoPlayerId = null;
+    }
+  }
+
   void _advance(int steps) {
     currentPlayerIndex = _peek(steps);
   }
@@ -312,6 +472,9 @@ class GameState {
     'status': status.name,
     'winnerId': winnerId,
     'drawnThisTurn': drawnThisTurn,
+    'pendingDrawCount': pendingDrawCount,
+    'unoDeclaredBeforePlay': unoDeclaredBeforePlay.toList(),
+    'catchableUnoPlayerId': catchableUnoPlayerId,
     'log': log,
   };
 
@@ -331,6 +494,11 @@ class GameState {
     status: GameStatus.values.byName(json['status'] as String),
     winnerId: json['winnerId'] as String?,
     drawnThisTurn: (json['drawnThisTurn'] as bool?) ?? false,
+    pendingDrawCount: (json['pendingDrawCount'] as int?) ?? 0,
+    unoDeclaredBeforePlay: (json['unoDeclaredBeforePlay'] as List?)
+        ?.map((e) => e as String)
+        .toSet(),
+    catchableUnoPlayerId: json['catchableUnoPlayerId'] as String?,
     log: (json['log'] as List?)?.map((e) => e as String).toList(),
   );
 }

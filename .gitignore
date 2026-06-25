@@ -41,6 +41,13 @@ app.*.map.json
 # Cursor (local editor state — không push)
 .cursor/
 
+# Cursor / codegen caches (local)
+.codegraph/
+skills-lock.json
+
+# Flutter Version Manager (nếu dùng)
+.fvm/
+
 # =============================================================================
 # OS junk
 # =============================================================================
@@ -71,6 +78,13 @@ $RECYCLE.BIN/
 **/android/app/profile/
 **/android/app/release/
 **/android/**/google-services.json
+**/android/.kotlin/
+**/android/**/.kotlin/
+
+# APK / AAB build artifacts (ngoài thư mục build)
+*.apk
+*.aab
+*.ipa
 
 # =============================================================================
 # iOS / macOS
@@ -163,3 +177,12 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# =============================================================================
+# Giữ lại khi push (KHÔNG ignore):
+# - pubspec.lock
+# - lib/firebase_options.dart (cấu hình client Firebase)
+# - .metadata
+# - assets/
+# - firestore.rules, firebase.json
+# =============================================================================

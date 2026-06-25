@@ -1,4 +1,7 @@
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 
 import '../online/auth_service.dart';
 import '../widgets/google_sign_in_button.dart';
@@ -26,10 +29,32 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       await action();
     } catch (e) {
-      if (mounted) setState(() => _error = 'Đăng nhập thất bại');
+      if (mounted) setState(() => _error = _loginErrorMessage(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  String _loginErrorMessage(Object error) {
+    if (error is GoogleSignInException) {
+      return 'Đăng nhập Google bị hủy hoặc thất bại.';
+    }
+    if (error is FirebaseAuthException) {
+      return switch (error.code) {
+        'network-request-failed' => 'Không có mạng. Kiểm tra kết nối rồi thử lại.',
+        'too-many-requests' => 'Quá nhiều lần thử. Đợi vài phút rồi thử lại.',
+        _ => 'Đăng nhập thất bại (${error.code}).',
+      };
+    }
+    if (error is StateError) {
+      return error.message;
+    }
+    final message = error.toString();
+    if (message.contains('idToken') || message.contains('SHA-1')) {
+      return 'Cấu hình Google chưa đúng. Thêm SHA-1 vào Firebase.';
+    }
+    if (kDebugMode) return 'Đăng nhập thất bại: $error';
+    return 'Đăng nhập thất bại';
   }
 
   @override

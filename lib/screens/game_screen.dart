@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import '../app_settings.dart';
 import '../daily_quests/daily_quest_store.dart';
 import '../titles/title_store.dart';
 import '../game/game_controller.dart';
@@ -7,9 +10,23 @@ import '../models/game_state.dart';
 import '../models/uno_card.dart';
 import '../models/uno_player.dart';
 import '../widgets/app_snack.dart';
-import '../widgets/uno_card_widget.dart';
+import '../widgets/game/game_match_intro.dart';
+import '../widgets/game/game_card_motion.dart';
+import '../widgets/game/game_center_piles.dart';
+import '../widgets/game/game_event_feedback.dart';
+import '../widgets/game/game_hand_layout.dart';
+import '../widgets/game/game_opponent_chip.dart';
+import '../widgets/game/game_opponent_row.dart';
+import '../widgets/game/game_premium_dialog.dart';
+import '../widgets/game/game_status_bar.dart';
+import '../widgets/game/game_player_hand_strip.dart';
+import '../widgets/game/game_table_header.dart';
+import '../widgets/game/game_table_shell.dart';
+import '../widgets/game/game_theme.dart';
+import '../widgets/game/opponent_chip_density.dart';
+import '../widgets/settings_sheet.dart';
 
-/// Bàn chơi UNO (người thật vs bot).
+/// Bàn chơi UNO offline — premium đỏ–vàng, dùng chung Game Table Kit.
 class GameScreen extends StatefulWidget {
   final int botCount;
   const GameScreen({super.key, required this.botCount});
@@ -19,22 +36,116 @@ class GameScreen extends StatefulWidget {
 }
 
 class _GameScreenState extends State<GameScreen> {
+  static const _compactBotThreshold = 4;
+
   late final GameController _controller;
+  final _eventFeedback = GameEventFeedback();
+  final _discardKey = GlobalKey();
+  final _drawKey = GlobalKey();
+  final _handKey = GlobalKey();
+  final _flyAnchorKey = GlobalKey();
+  final _motionKey = GlobalKey<GameCardMotionLayerState>();
+  final _drawFlyKey = GlobalKey();
+  final _intro = GameMatchIntroController();
+  final _handCounts = <String, int>{};
   bool _winShown = false;
+  bool _playQuestRecorded = false;
+  bool _suppressPlayAnim = false;
+  bool _suppressDrawAnim = false;
+  bool _introSeqRunning = false;
+  UnoCard? _animatingCard;
+  int? _flyingHandIndex;
+  List<UnoCard>? _frozenHand;
+  UnoCard? _selectedCard;
+
+  GameCardMotionLayerState? get _motion => _motionKey.currentState;
+  bool get _introBlocksPlay => _intro.blocksInteraction;
 
   @override
   void initState() {
     super.initState();
-    DailyQuestStore.instance.markOfflinePlay();
-    TitleStore.instance.recordOfflinePlay();
-    _controller = GameController()..startGame(botCount: widget.botCount);
+    _controller = GameController();
     _controller.addListener(_onChange);
+    _intro.addListener(_onIntroChange);
+    _eventFeedback.reset();
+    _controller.startGame(botCount: widget.botCount, runBots: false);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(_startMatchIntro(_controller.state));
+    });
+  }
+
+  void _onIntroChange() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _startMatchIntro(GameState game) async {
+    final fp = GameMatchIntroController.fingerprint(game);
+    if (_intro.hasCompleted(fp) || _intro.isActive || _introSeqRunning) return;
+
+    _introSeqRunning = true;
+    _intro.begin(fp, game.players.map((p) => p.id).toList());
+    _snapshotHands(game);
+
+    try {
+      await GameMatchIntroRunner.runCountdown(_intro);
+      if (!mounted || _intro.isDone) return;
+
+      if (_useCardMotion) {
+        _intro.setDealing();
+        await WidgetsBinding.instance.endOfFrame;
+        await WidgetsBinding.instance.endOfFrame;
+        if (!mounted || _intro.isDone) return;
+        final pileW = GameTheme.pileWidthFor(MediaQuery.sizeOf(context).width);
+        await GameMatchIntroRunner.runDealSequence(
+          motion: _motion,
+          controller: _intro,
+          game: game,
+          myUid: GameController.humanId,
+          drawKey: _drawFlyKey,
+          handKey: _handKey,
+          opponentKeys: const {},
+          pileWidth: pileW,
+          viewportWidth: MediaQuery.sizeOf(context).width,
+        );
+        if (!mounted || _intro.isDone) return;
+        await GameMatchIntroRunner.runStarterReveal(
+          motion: _motion,
+          starterCard: game.topCard,
+          drawKey: _drawFlyKey,
+          pileWidth: pileW,
+        );
+      }
+
+      if (!mounted) return;
+      if (!_intro.isDone) _intro.markDone();
+      _controller.resumeBots();
+    } finally {
+      _introSeqRunning = false;
+      if (mounted) setState(() {});
+    }
   }
 
   void _onChange() {
+    if (!mounted) return;
+    _eventFeedback.onLogChanged(context, _controller.state.log);
+    _detectOpponentMotion(_controller.state);
+
+    if (_controller.isFinished && !_playQuestRecorded) {
+      _playQuestRecorded = true;
+      DailyQuestStore.instance.markOfflinePlay();
+      TitleStore.instance.recordOfflinePlay();
+    }
+
     if (_controller.isFinished && !_winShown) {
       _winShown = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) => _showWinDialog());
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _showWinDialog();
+      });
+    }
+    if (!_controller.isHumanTurn) {
+      _selectedCard = null;
     }
     setState(() {});
   }
@@ -42,71 +153,230 @@ class _GameScreenState extends State<GameScreen> {
   @override
   void dispose() {
     _controller.removeListener(_onChange);
+    _intro.removeListener(_onIntroChange);
     _controller.dispose();
     super.dispose();
   }
 
-  Future<void> _onCardTap(UnoCard card) async {
+  bool get _showHints => AppSettings.instance.showPlayableHints;
+
+  bool get _useCardMotion => AppSettings.instance.cardAnimations;
+
+  void _snapshotHands(GameState state) {
+    _handCounts
+      ..clear()
+      ..addEntries(state.players.map((p) => MapEntry(p.id, p.hand.length)));
+  }
+
+  void _detectOpponentMotion(GameState state) {
+    if (_introBlocksPlay) return;
+
+    if (_handCounts.isEmpty) {
+      _snapshotHands(state);
+      return;
+    }
+
+    for (final player in state.players) {
+      final prev = _handCounts[player.id] ?? player.hand.length;
+      if (player.hand.length == prev - 1 && !_suppressPlayAnim) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          _animateOpponentPlay(player, state.topCard);
+        });
+        break;
+      }
+      if (player.hand.length == prev + 1 &&
+          player.id != GameController.humanId &&
+          !_suppressDrawAnim) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          _animateOpponentDraw(player);
+        });
+        break;
+      }
+    }
+
+    _suppressPlayAnim = false;
+    _suppressDrawAnim = false;
+    _snapshotHands(state);
+  }
+
+  Future<void> _animateOpponentPlay(UnoPlayer player, UnoCard card) async {
+    final motion = _useCardMotion ? _motion : null;
+    if (motion == null) return;
+
+    final from = _seatCenter(player);
+    final to = GameCardMotionLayerState.centerOf(_discardKey);
+    await motion.fly(
+      card: card,
+      from: from,
+      to: to,
+      width: GameTheme.pileWidthFor(MediaQuery.sizeOf(context).width),
+    );
+  }
+
+  Future<void> _animateOpponentDraw(UnoPlayer player) async {
+    final motion = _useCardMotion ? _motion : null;
+    if (motion == null) return;
+
+    final from = GameCardMotionLayerState.centerOf(_drawKey);
+    final to = _seatCenter(player);
+    await motion.fly(
+      card: _controller.state.topCard,
+      from: from,
+      to: to,
+      width: GameTheme.pileWidthFor(MediaQuery.sizeOf(context).width),
+      faceDown: true,
+      duration: const Duration(milliseconds: 320),
+    );
+  }
+
+  Offset _seatCenter(UnoPlayer player) {
+    final size = MediaQuery.sizeOf(context);
+    final top = MediaQuery.paddingOf(context).top + 88;
+    if (player.isBot) {
+      final bots = _controller.state.players.where((p) => p.isBot).toList();
+      final index = bots.indexWhere((b) => b.id == player.id);
+      if (index >= 0 && bots.length >= _compactBotThreshold) {
+        final rowW = size.width - 32;
+        final chipW = OpponentChipDensityX.forBotCount(bots.length).botChipWidth;
+        final gap = 8.0;
+        final stride = chipW + gap;
+        final totalW = bots.length * chipW + (bots.length - 1) * gap;
+        final startX = (rowW - totalW) / 2 + 16;
+        final x = startX + index * stride + chipW / 2;
+        return Offset(x, top + 28);
+      }
+    }
+    return Offset(size.width / 2, top);
+  }
+
+  Future<void> _drawAnimated() async {
+    if (_introBlocksPlay) return;
+    if (!_controller.isHumanTurn || _controller.botThinking) return;
+
+    final state = _controller.state;
+    if (state.mustRespondToDrawStack) {
+      _controller.acceptDrawStack();
+      return;
+    }
+    if (state.drawnThisTurn) return;
+
+    final motion = _useCardMotion ? _motion : null;
+    if (motion == null) {
+      _controller.drawHuman();
+      return;
+    }
+
+    await WidgetsBinding.instance.endOfFrame;
+    final from = GameCardMotionLayerState.centerOf(_drawKey);
+    final to = GameCardMotionLayerState.centerOf(
+      _handKey,
+      fallback: Offset(
+        MediaQuery.sizeOf(context).width / 2,
+        MediaQuery.sizeOf(context).height - 120,
+      ),
+    );
+
+    _suppressDrawAnim = true;
+    await motion.fly(
+      card: _controller.state.topCard,
+      from: from,
+      to: to,
+      width: GameTheme.pileWidthFor(MediaQuery.sizeOf(context).width),
+      faceDown: true,
+      duration: const Duration(milliseconds: 400),
+    );
+    if (!mounted) return;
+    _controller.drawHuman();
+  }
+
+  Future<void> _playCardAnimated(UnoCard card, {CardColor? chosenColor}) async {
+    if (_introBlocksPlay) return;
+    final hand = _frozenHand ?? _controller.human.hand;
+    final index = hand.indexWhere((c) => identical(c, card));
+    if (index < 0) return;
+
+    _frozenHand = List<UnoCard>.from(_controller.human.hand);
+    _flyingHandIndex = index;
+
+    final layout = GameHandLayout.compute(
+      viewportWidth: MediaQuery.sizeOf(context).width,
+      cardCount: _frozenHand!.length,
+    );
+    final motion = _useCardMotion ? _motion : null;
+
+    try {
+      if (motion != null) {
+        setState(() => _animatingCard = card);
+        await WidgetsBinding.instance.endOfFrame;
+
+        final from = GameCardMotionLayerState.centerOf(_flyAnchorKey);
+        final to = GameCardMotionLayerState.centerOf(_discardKey);
+        _suppressPlayAnim = true;
+        await motion.fly(
+          card: card,
+          from: from,
+          to: to,
+          width: layout.cardWidth,
+        );
+        if (!mounted) return;
+      } else {
+        _suppressPlayAnim = true;
+      }
+
+      _controller.playHuman(card, chosenColor: chosenColor, handIndex: index);
+      if (mounted) setState(() => _selectedCard = null);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _animatingCard = null;
+          _flyingHandIndex = null;
+          _frozenHand = null;
+        });
+      }
+    }
+  }
+
+  void _selectCard(UnoCard card) {
     if (!_controller.canPlay(card)) {
-      AppSnack.warning(
-        context,
-        'Không thể đánh lá này',
-        duration: const Duration(milliseconds: 900),
-      );
+      AppSnack.warning(context, 'Không thể chọn lá này',
+          duration: const Duration(milliseconds: 900));
+      return;
+    }
+    setState(() => _selectedCard = card);
+  }
+
+  Future<void> _playSelected() async {
+    final card = _selectedCard;
+    if (card == null) {
+      AppSnack.warning(context, 'Chọn lá bài trước',
+          duration: const Duration(milliseconds: 900));
+      return;
+    }
+    if (!_controller.canPlay(card)) {
+      setState(() => _selectedCard = null);
       return;
     }
     CardColor? chosen;
     if (card.isWild) {
-      chosen = await _pickColor();
-      if (chosen == null) return; // người chơi huỷ
+      chosen = await GamePremiumDialog.pickColor(context);
+      if (chosen == null) return;
     }
-    _controller.playHuman(card, chosenColor: chosen);
+    await _playCardAnimated(card, chosenColor: chosen);
   }
 
-  Future<CardColor?> _pickColor() {
-    return showDialog<CardColor>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Chọn màu'),
-        content: Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          children: [
-            for (final c in [
-              CardColor.red,
-              CardColor.yellow,
-              CardColor.green,
-              CardColor.blue,
-            ])
-              GestureDetector(
-                onTap: () => Navigator.of(ctx).pop(c),
-                child: Container(
-                  width: 64,
-                  height: 64,
-                  decoration: BoxDecoration(
-                    color: unoColor(c),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.white, width: 2),
-                  ),
-                  alignment: Alignment.center,
-                  child: Text(
-                    unoColorName(c),
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
+  void _callUno() {
+    _controller.callUno();
+    AppSnack.success(context, 'UNO!', icon: Icons.campaign_rounded);
+  }
+
+  void _catchUno(String targetId) {
+    _controller.catchUno(targetId);
   }
 
   void _showWinDialog() {
+    if (!mounted) return;
     final state = _controller.state;
     final winner = state.players.firstWhere((p) => p.id == state.winnerId);
     final youWon = winner.id == GameController.humanId;
@@ -114,286 +384,292 @@ class _GameScreenState extends State<GameScreen> {
       DailyQuestStore.instance.markOfflineWin();
       TitleStore.instance.recordOfflineWin();
     }
-    showDialog(
+    GamePremiumDialog.showWin(
       context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        title: Text(youWon ? '🎉 Bạn thắng!' : 'Kết thúc'),
-        content: Text(
-          youWon ? 'Chúc mừng, bạn đã hết bài!' : '${winner.name} đã thắng.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.of(ctx).pop();
-              Navigator.of(context).pop(); // về menu
-            },
-            child: const Text('Về menu'),
-          ),
-          FilledButton(
-            onPressed: () {
-              Navigator.of(ctx).pop();
-              setState(() => _winShown = false);
-              _controller.startGame(botCount: widget.botCount);
-            },
-            child: const Text('Chơi lại'),
-          ),
-        ],
-      ),
+      youWon: youWon,
+      winnerName: winner.name,
+      leaveLabel: 'Về menu',
+      onLeave: () => Navigator.of(context).pop(),
+      replayLabel: 'Chơi lại',
+      onReplay: () {
+        setState(() {
+          _winShown = false;
+          _playQuestRecorded = false;
+        });
+        _eventFeedback.reset();
+        _handCounts.clear();
+        _intro.reset();
+        _controller.startGame(botCount: widget.botCount, runBots: false);
+        unawaited(_startMatchIntro(_controller.state));
+      },
     );
+  }
+
+  Future<void> _confirmLeave() async {
+    final leave = await GamePremiumDialog.confirmLeave(context);
+    if (leave && mounted) Navigator.of(context).pop();
   }
 
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: AppSettings.instance,
+      builder: (context, _) => _buildBody(context),
+    );
+  }
+
+  Widget _buildBody(BuildContext context) {
     final state = _controller.state;
     final bots = state.players.where((p) => p.isBot).toList();
+    final humanTurn =
+        _controller.isHumanTurn && !_controller.botThinking && !_introBlocksPlay;
+    final settings = AppSettings.instance;
+    final human = _controller.human;
+    final catchableId = state.catchableUnoPlayerId;
+    UnoPlayer? catchablePlayer;
+    if (catchableId != null) {
+      for (final p in state.players) {
+        if (p.id == catchableId) {
+          catchablePlayer = p;
+          break;
+        }
+      }
+    }
+    final showUno = humanTurn &&
+        !settings.autoUnoCall &&
+        !state.hasDeclaredUno(GameController.humanId) &&
+        (human.hand.length == 2 ||
+            (human.hand.length == 1 &&
+                catchableId != GameController.humanId));
+    final showCatch = catchableId != null &&
+        catchableId != GameController.humanId &&
+        !_introBlocksPlay;
+    final statusLabel = _intro.phase == GameMatchIntroPhase.dealing
+        ? 'Đang chia bài...'
+        : _intro.phase == GameMatchIntroPhase.countdown
+            ? 'Chuẩn bị...'
+            : humanTurn
+                ? 'Lượt của bạn'
+                : 'Lượt ${_controller.state.currentPlayer.name}';
 
-    return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: RadialGradient(
-            radius: 1.0,
-            colors: [Color(0xFF2E7D32), Color(0xFF0D3311)],
-          ),
-        ),
-        child: SafeArea(
-          child: Column(
-            children: [
-              _topBar(state),
-              _opponentsRow(state, bots),
-              Expanded(child: _centerArea(state)),
-              _statusLine(state),
-              _humanHand(state),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _topBar(GameState state) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      child: Row(
-        children: [
-          IconButton(
-            icon: const Icon(Icons.arrow_back, color: Colors.white),
-            onPressed: () => Navigator.of(context).pop(),
-          ),
-          const Spacer(),
-          Icon(
-            state.direction == PlayDirection.clockwise
-                ? Icons.rotate_right
-                : Icons.rotate_left,
-            color: Colors.white,
-          ),
-          const SizedBox(width: 6),
-          const Text('Chiều', style: TextStyle(color: Colors.white70)),
-          const SizedBox(width: 16),
-          const Text('Màu: ', style: TextStyle(color: Colors.white70)),
-          Container(
-            width: 22,
-            height: 22,
-            decoration: BoxDecoration(
-              color: unoColor(state.activeColor),
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white, width: 2),
-            ),
-          ),
-          const SizedBox(width: 8),
-        ],
-      ),
-    );
-  }
-
-  Widget _opponentsRow(GameState state, List<UnoPlayer> bots) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
-      child: Wrap(
-        alignment: WrapAlignment.center,
-        spacing: 18,
-        runSpacing: 6,
-        children: [
-          for (final bot in bots) _opponentTile(state, bot),
-        ],
-      ),
-    );
-  }
-
-  Widget _opponentTile(GameState state, UnoPlayer bot) {
-    final isTurn = state.currentPlayer.id == bot.id;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          decoration: BoxDecoration(
-            color: isTurn ? const Color(0xFFFFC107) : Colors.black26,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Text(
-            bot.name,
-            style: TextStyle(
-              color: isTurn ? Colors.black : Colors.white,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ),
-        const SizedBox(height: 4),
-        Stack(
-          clipBehavior: Clip.none,
-          children: [
-            const UnoCardBack(width: 32),
-            Positioned(
-              right: -6,
-              top: -6,
-              child: CircleAvatar(
-                radius: 11,
-                backgroundColor: Colors.red,
-                child: Text(
-                  '${bot.hand.length}',
-                  style: const TextStyle(color: Colors.white, fontSize: 11),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        await _confirmLeave();
+      },
+      child: Scaffold(
+        body: GameCardMotionLayer(
+          key: _motionKey,
+          child: GameTableShell(
+            child: SafeArea(
+              child: AbsorbPointer(
+                absorbing: _introBlocksPlay,
+                child: Stack(
+                  children: [
+                    Column(
+                      children: [
+                        GameTableHeader(
+                          game: state,
+                          onBack: _confirmLeave,
+                          onSettings: () => SettingsSheet.show(context),
+                        ),
+                        Expanded(child: _arena(state, bots)),
+                        GameStatusBar(
+                          isMyTurn: humanTurn,
+                          turnLabel: statusLabel,
+                          canPass: _controller.canPass && !_introBlocksPlay,
+                          onPass: _controller.passHuman,
+                          showUnoButton: showUno,
+                          onUno: _callUno,
+                          showCatchUnoButton: showCatch,
+                          catchUnoLabel: catchablePlayer == null
+                              ? 'Bắt UNO'
+                              : 'Bắt ${catchablePlayer.name}',
+                          onCatchUno: catchableId == null
+                              ? null
+                              : () => _catchUno(catchableId),
+                          drawStackCount: humanTurn
+                              ? state.pendingDrawCount
+                              : 0,
+                        ),
+                        const SizedBox(height: 6),
+                        _handSection(state),
+                        const SizedBox(height: 12),
+                      ],
+                    ),
+                    GameMatchIntroOverlay(
+                      label: _intro.countdownLabel,
+                      visible: _intro.phase == GameMatchIntroPhase.countdown,
+                    ),
+                  ],
                 ),
               ),
             ),
-          ],
-        ),
-        if (bot.hasUno)
-          const Padding(
-            padding: EdgeInsets.only(top: 2),
-            child: Text(
-              'UNO!',
-              style: TextStyle(
-                color: Color(0xFFFFC107),
-                fontWeight: FontWeight.bold,
-              ),
-            ),
           ),
-      ],
+        ),
+      ),
     );
   }
 
-  Widget _centerArea(GameState state) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
+  Widget _arena(GameState state, List<UnoPlayer> bots) {
+    final humanTurn = _controller.isHumanTurn &&
+        !_controller.botThinking &&
+        !_introBlocksPlay;
+
+    return Stack(
+      clipBehavior: Clip.none,
       children: [
-        // Chồng bài rút
-        Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            GestureDetector(
-              onTap: _controller.isHumanTurn && !_controller.botThinking
-                  ? _controller.drawHuman
-                  : null,
-              child: const UnoCardBack(width: 60),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Rút (${state.drawPile.length})',
-              style: const TextStyle(color: Colors.white70, fontSize: 12),
-            ),
-          ],
+        Positioned.fill(
+          top: 8,
+          bottom: 20,
+          child: _botArc(state, bots),
         ),
-        const SizedBox(width: 28),
-        // Lá trên cùng
-        Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            UnoCardWidget(card: state.topCard, width: 72),
-            const SizedBox(height: 4),
-            const Text(
-              'Đã đánh',
-              style: TextStyle(color: Colors.white70, fontSize: 12),
-            ),
-          ],
+        Center(
+          child: GameCenterPiles(
+            topCard: state.topCard,
+            activeColor: state.activeColor,
+            canDraw: humanTurn &&
+                (state.mustRespondToDrawStack || !state.drawnThisTurn),
+            onDraw: _drawAnimated,
+            drawPileCount: state.drawPile.length,
+            discardKey: _discardKey,
+            drawKey: _drawKey,
+            drawFlyKey: _drawFlyKey,
+            discardCount: state.discardPile.length,
+            hideDiscard: _introBlocksPlay,
+          ),
         ),
       ],
     );
   }
 
-  Widget _statusLine(GameState state) {
-    String text;
-    if (state.status == GameStatus.finished) {
-      text = 'Ván kết thúc';
-    } else if (_controller.botThinking) {
-      text = '${state.currentPlayer.name} đang suy nghĩ...';
-    } else if (_controller.isHumanTurn) {
-      text = _controller.canPass
-          ? 'Đến lượt bạn — đánh hoặc qua lượt'
-          : 'Đến lượt bạn';
-    } else {
-      text = 'Lượt của ${state.currentPlayer.name}';
+  Widget _botArc(GameState state, List<UnoPlayer> bots) {
+    final density = OpponentChipDensityX.forBotCount(bots.length);
+
+    if (bots.length >= _compactBotThreshold) {
+      final activeIndex = bots.indexWhere(
+        (b) => b.id == state.currentPlayer.id,
+      );
+
+      return Align(
+        alignment: Alignment.topCenter,
+        child: GameOpponentRow(
+          itemCount: bots.length,
+          activeIndex: activeIndex < 0 ? 0 : activeIndex,
+          density: density,
+          botOnly: true,
+          itemBuilder: (context, i) {
+            final bot = bots[i];
+            final catchable = state.catchableUnoPlayerId == bot.id;
+            return GameOpponentChip(
+              player: bot,
+              isTurn: !_introBlocksPlay && state.currentPlayer.id == bot.id,
+              isBot: true,
+              density: density,
+              thinking: _controller.botThinking &&
+                  state.currentPlayer.id == bot.id,
+              cardCountOverride: _intro.virtualHandCounts[bot.id],
+              catchableUno: catchable,
+              onCatchUno: catchable ? () => _catchUno(bot.id) : null,
+            );
+          },
+        ),
+      );
     }
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Flexible(
-            child: Text(
-              text,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final w = constraints.maxWidth;
+        final h = constraints.maxHeight;
+        return Stack(
+          clipBehavior: Clip.none,
+          children: [
+            for (var i = 0; i < bots.length; i++)
+              _arcSeat(
+                index: i,
+                count: bots.length,
+                width: w,
+                height: h,
+                child: GameOpponentChip(
+                  player: bots[i],
+                  isTurn: !_introBlocksPlay &&
+                      state.currentPlayer.id == bots[i].id,
+                  isBot: true,
+                  density: density,
+                  thinking: _controller.botThinking &&
+                      state.currentPlayer.id == bots[i].id,
+                  cardCountOverride: _intro.virtualHandCounts[bots[i].id],
+                  catchableUno: state.catchableUnoPlayerId == bots[i].id,
+                  onCatchUno: state.catchableUnoPlayerId == bots[i].id
+                      ? () => _catchUno(bots[i].id)
+                      : null,
+                ),
               ),
-            ),
-          ),
-          if (_controller.canPass) ...[
-            const SizedBox(width: 12),
-            FilledButton(
-              onPressed: _controller.passHuman,
-              child: const Text('Qua lượt'),
-            ),
           ],
-        ],
-      ),
+        );
+      },
     );
   }
 
-  Widget _humanHand(GameState state) {
-    final human = _controller.human;
-    return Container(
-      height: 116,
-      width: double.infinity,
-      decoration: const BoxDecoration(
-        color: Colors.black26,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Text(
-              'Bài của bạn (${human.hand.length})',
-              style: const TextStyle(color: Colors.white, fontSize: 13),
-            ),
-          ),
-          Expanded(
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              itemCount: human.hand.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 6),
-              itemBuilder: (context, i) {
-                final card = human.hand[i];
-                final playable = _controller.canPlay(card);
-                return Opacity(
-                  opacity: playable || !_controller.isHumanTurn ? 1 : 0.55,
-                  child: Transform.translate(
-                    offset: Offset(0, playable ? -10 : 0),
-                    child: UnoCardWidget(
-                      card: card,
-                      width: 54,
-                      onTap: () => _onCardTap(card),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-        ],
-      ),
+  Widget _arcSeat({
+    required int index,
+    required int count,
+    required double width,
+    required double height,
+    required Widget child,
+  }) {
+    final useTwoRows = count > 5;
+    final topCount = useTwoRows ? (count + 1) ~/ 2 : count;
+    final isTopRow = !useTwoRows || index < topCount;
+    final rowIndex = isTopRow ? index : index - topCount;
+    final rowCount = isTopRow ? topCount : count - topCount;
+
+    final t = rowCount == 1 ? 0.0 : (rowIndex / (rowCount - 1)) * 2 - 1;
+    final spread = count > 7 ? 0.48 : 0.42;
+    final x = width * 0.5 + t * width * spread;
+    final y = isTopRow
+        ? height * 0.02 + t.abs() * height * 0.03
+        : height * 0.16 + t.abs() * height * 0.02;
+    final chipW = count > 7 ? 80.0 : 92.0;
+
+    return Positioned(
+      left: x - chipW / 2,
+      top: y,
+      width: chipW,
+      child: child,
+    );
+  }
+
+  Widget _handSection(GameState state) {
+    if (_introBlocksPlay) {
+      final virtualCount = _intro.virtualHandCounts[GameController.humanId] ?? 0;
+      return GameIntroHandStrip(
+        handKey: _handKey,
+        cardCount: virtualCount,
+        viewportWidth: MediaQuery.sizeOf(context).width,
+      );
+    }
+
+    final cards = _frozenHand ?? _controller.human.hand;
+    final humanTurn = _controller.isHumanTurn && !_controller.botThinking;
+
+    return GamePlayerHandStrip(
+      key: _handKey,
+      cards: cards,
+      isMyTurn: humanTurn,
+      showHints: _showHints,
+      canPlay: _controller.canPlay,
+      flyingHandIndex: _flyingHandIndex,
+      selectedCard: _selectedCard,
+      flyAnchorKey: _flyAnchorKey,
+      onCardTap: (card, _) {
+        if (identical(_selectedCard, card)) {
+          _playSelected();
+        } else {
+          _selectCard(card);
+        }
+      },
     );
   }
 }

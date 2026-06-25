@@ -7,11 +7,16 @@ import '../titles/title_store.dart';
 import '../widgets/home_quest_hub.dart';
 import '../widgets/home_title_card.dart';
 import '../user/user_session.dart';
+import '../friends/presence_service.dart';
+import '../widgets/google_account_gate.dart';
 import '../widgets/sign_out_dialog.dart';
 import '../widgets/user_avatar.dart';
 import '../widgets/home_footer.dart';
 import '../widgets/uno_circle_button.dart';
+import '../game/game_limits.dart';
 import 'game_screen.dart';
+import 'friends_screen.dart';
+import 'leaderboard_screen.dart';
 import 'online/online_menu_screen.dart';
 import 'settings_screen.dart';
 import 'titles_screen.dart';
@@ -28,14 +33,26 @@ class _HomeScreenState extends State<HomeScreen> {
   static const _card = Color(0xFF2A0707);
   static const _gold = Color(0xFFFFC400);
 
+  final _presence = PresenceService.instance;
+
   @override
   void initState() {
     super.initState();
     _bootstrap();
   }
 
+  @override
+  void dispose() {
+    _presence.stop();
+    super.dispose();
+  }
+
   Future<void> _bootstrap() async {
     await UserSession.activate(AuthService().currentUser);
+    final uid = AuthService().currentUser?.uid;
+    if (uid != null && uid.isNotEmpty && !AuthService().isGuest) {
+      await _presence.start(uid);
+    }
     if (mounted) setState(() {});
   }
 
@@ -94,7 +111,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     );
                   },
                 ),
-                const SizedBox(height: 14),
+                const SizedBox(height: 10),
                 ListenableBuilder(
                   listenable: TitleStore.instance,
                   builder: (context, _) =>
@@ -113,6 +130,22 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                         );
                       },
+                      onLeaderboard: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const LeaderboardScreen(),
+                          ),
+                        );
+                      },
+                      onFriends: () async {
+                        if (!await requireGoogleAccount(context)) return;
+                        if (!context.mounted) return;
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const FriendsScreen(),
+                          ),
+                        );
+                      },
                     ),
                   ),
                 ),
@@ -120,10 +153,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   onRules: () => _showInfo(
                     context,
                     'Luật chơi UNO',
-                    '• Đánh lá cùng màu, số hoặc loại với lá trên cùng.\n'
+                    '• 2–${GameLimits.maxPlayers} người · chia 7 lá mỗi người.\n'
+                        '• Đánh lá cùng màu, số hoặc loại với lá trên cùng.\n'
                         '• Wild / +4: chọn màu mới.\n'
                         '• Skip · Reverse · +2 theo luật chuẩn.\n'
-                        '• Còn 1 lá: hô UNO!\n'
+                    '• Còn 2 lá: hô UNO! khi đánh lá áp chót — quên bị bắt rút 2 lá.\n'
+                        '• +2/+4 có thể cộng dồn (đánh đè +2/+4).\n'
+                        '• Mỗi lượt chỉ đánh 1 lá.\n'
                         '• Hết bài trước = thắng.',
                   ),
                   onTerms: () => _showInfo(
@@ -186,7 +222,8 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: Icons.settings,
             label: '',
             showLabel: false,
-            size: 46,
+            size: 40,
+            iconScale: 0.5,
             onTap: () {
               Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const SettingsScreen()),
@@ -198,7 +235,8 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: Icons.logout,
             label: '',
             showLabel: false,
-            size: 46,
+            size: 40,
+            iconScale: 0.5,
             onTap: () async {
               if (!await confirmSignOut(context)) return;
               await auth.signOut();
@@ -305,14 +343,14 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    '${bots + 1} người chơi',
+                    '${bots + 1} người chơi (tối đa ${GameLimits.maxPlayers})',
                     style: const TextStyle(color: Colors.white70),
                   ),
                   Slider(
                     value: bots.toDouble(),
-                    min: 1,
-                    max: 5,
-                    divisions: 4,
+                    min: GameLimits.minBots.toDouble(),
+                    max: GameLimits.maxBots.toDouble(),
+                    divisions: GameLimits.maxBots - GameLimits.minBots,
                     label: '$bots',
                     activeColor: const Color(0xFFFFC107),
                     onChanged: (v) => setLocal(() => bots = v.round()),

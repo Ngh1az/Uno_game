@@ -4,13 +4,31 @@ import '../models/uno_card.dart';
 /// AI đơn giản cho người chơi bot.
 class UnoBot {
   /// Thực hiện trọn vẹn 1 lượt cho người chơi bot đang tới lượt.
-  ///
-  /// Chiến lược:
-  /// 1. Nếu có lá đánh được -> ưu tiên đánh lá thường/đặc biệt trước, để dành Wild.
-  /// 2. Nếu không có -> rút 1 lá; rút được lá đánh được thì đánh, không thì qua lượt.
   static void takeTurn(GameState state) {
     final bot = state.currentPlayer;
     if (!bot.isBot) return;
+
+    final catchable = state.catchableUnoPlayerId;
+    if (catchable != null && catchable != bot.id) {
+      state.catchUno(bot.id, catchable);
+    }
+
+    if (state.mustRespondToDrawStack) {
+      final stackable = state
+          .playableCards(bot)
+          .where(
+            (c) =>
+                c.type == CardType.drawTwo ||
+                c.type == CardType.wildDrawFour,
+          )
+          .toList();
+      if (stackable.isNotEmpty) {
+        _play(state, stackable.first);
+      } else {
+        state.acceptDrawStack(bot.id);
+      }
+      return;
+    }
 
     final playable = state.playableCards(bot);
     if (playable.isNotEmpty) {
@@ -18,30 +36,34 @@ class UnoBot {
       return;
     }
 
-    // Không có lá nào -> rút.
     final drawn = state.drawCard(bot.id);
-    // Nếu sau khi rút vẫn tới lượt bot (lá rút đánh được) thì đánh luôn.
     if (state.status == GameStatus.playing &&
         state.currentPlayer.id == bot.id &&
         state.canPlay(drawn)) {
       _play(state, drawn);
     }
-    // Nếu lá rút không đánh được, engine đã tự chuyển lượt rồi.
   }
 
   static void _play(GameState state, UnoCard card) {
+    final bot = state.currentPlayer;
+    if (bot.hand.length == 2) {
+      state.callUno(bot.id);
+    }
     final color = card.isWild ? _chooseColor(state) : null;
-    state.playCard(state.currentPlayer.id, card, chosenColor: color);
+    state.playCard(
+      bot.id,
+      card,
+      chosenColor: color,
+      declaredUno: state.hasDeclaredUno(bot.id),
+    );
   }
 
-  /// Ưu tiên đánh lá không phải Wild trước (giữ Wild để dùng lúc bí).
   static UnoCard _chooseCard(List<UnoCard> playable) {
     final nonWild = playable.where((c) => !c.isWild).toList();
     final pool = nonWild.isNotEmpty ? nonWild : playable;
     return pool.first;
   }
 
-  /// Chọn màu cho lá Wild = màu xuất hiện nhiều nhất trên tay bot.
   static CardColor _chooseColor(GameState state) {
     final counts = <CardColor, int>{
       CardColor.red: 0,

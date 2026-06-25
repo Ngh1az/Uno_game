@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 
+import '../app_settings.dart';
+import '../game/game_limits.dart';
 import '../models/game_state.dart';
 import '../models/uno_card.dart';
 import '../models/uno_player.dart';
@@ -9,12 +11,12 @@ import 'uno_bot.dart';
 class GameController extends ChangeNotifier {
   static const String humanId = 'me';
 
-  /// Độ trễ giữa các nước đi của bot để người chơi kịp theo dõi.
-  static const Duration botDelay = Duration(milliseconds: 900);
-
   GameState? _state;
   GameState get state => _state!;
   bool get hasGame => _state != null;
+
+  /// Độ trễ giữa các nước đi của bot — lấy từ [AppSettings.botSpeed].
+  Duration get botDelay => _botDelayFromSettings(AppSettings.instance.botSpeed);
 
   /// True khi bot đang đi (khoá tương tác của người chơi).
   bool _botThinking = false;
@@ -22,18 +24,32 @@ class GameController extends ChangeNotifier {
 
   bool _disposed = false;
 
-  /// Bắt đầu ván mới với [botCount] bot.
-  void startGame({int botCount = 3, String humanName = 'Bạn'}) {
+  static Duration _botDelayFromSettings(BotSpeed speed) => switch (speed) {
+    BotSpeed.slow => const Duration(milliseconds: 1400),
+    BotSpeed.normal => const Duration(milliseconds: 900),
+    BotSpeed.fast => const Duration(milliseconds: 450),
+  };
+
+  /// Bắt đầu ván mới với [botCount] bot (tổng 2–10 người: bạn + bot).
+  void startGame({
+    int botCount = 3,
+    String humanName = 'Bạn',
+    bool runBots = true,
+  }) {
+    final bots = botCount.clamp(GameLimits.minBots, GameLimits.maxBots);
     final players = <UnoPlayer>[
       UnoPlayer(id: humanId, name: humanName),
-      for (var i = 1; i <= botCount; i++)
+      for (var i = 1; i <= bots; i++)
         UnoPlayer(id: 'bot$i', name: 'Bot $i', isBot: true),
     ];
     _state = GameState.newGame(players: players);
     _botThinking = false;
     notifyListeners();
-    _runBotsIfNeeded();
+    if (runBots) _runBotsIfNeeded();
   }
+
+  /// Tiếp tục lượt bot sau intro mở ván.
+  void resumeBots() => _runBotsIfNeeded();
 
   UnoPlayer get human => state.playerById(humanId);
 
@@ -52,10 +68,46 @@ class GameController extends ChangeNotifier {
 
   bool canPlay(UnoCard card) => isHumanTurn && state.canPlay(card);
 
-  /// Người chơi đánh một lá. Với lá Wild cần truyền [chosenColor].
-  void playHuman(UnoCard card, {CardColor? chosenColor}) {
+  /// Người chơi qua lượt sau khi đã rút.
+  void passHuman() {
+    if (!canPass || _botThinking) return;
+    state.endTurn(humanId);
+    notifyListeners();
+    _runBotsIfNeeded();
+  }
+
+  void callUno() {
     if (!isHumanTurn || _botThinking) return;
-    state.playCard(humanId, card, chosenColor: chosenColor);
+    state.callUno(humanId);
+    notifyListeners();
+  }
+
+  void catchUno(String targetId) {
+    if (!hasGame || state.status != GameStatus.playing || _botThinking) return;
+    state.catchUno(humanId, targetId);
+    notifyListeners();
+    _runBotsIfNeeded();
+  }
+
+  void acceptDrawStack() {
+    if (!isHumanTurn || _botThinking) return;
+    state.acceptDrawStack(humanId);
+    notifyListeners();
+    _runBotsIfNeeded();
+  }
+
+  /// Người chơi đánh một lá. Với lá Wild cần truyền [chosenColor].
+  void playHuman(UnoCard card, {CardColor? chosenColor, int? handIndex}) {
+    if (!isHumanTurn || _botThinking) return;
+    final declaredUno = state.hasDeclaredUno(humanId) ||
+        (AppSettings.instance.autoUnoCall && human.hand.length == 2);
+    state.playCard(
+      humanId,
+      card,
+      chosenColor: chosenColor,
+      handIndex: handIndex,
+      declaredUno: declaredUno,
+    );
     notifyListeners();
     _runBotsIfNeeded();
   }
@@ -64,15 +116,6 @@ class GameController extends ChangeNotifier {
   void drawHuman() {
     if (!isHumanTurn || _botThinking || state.drawnThisTurn) return;
     state.drawCard(humanId);
-    notifyListeners();
-    // Nếu lá rút không đánh được, engine đã tự chuyển lượt -> cho bot đi.
-    _runBotsIfNeeded();
-  }
-
-  /// Người chơi qua lượt sau khi đã rút.
-  void passHuman() {
-    if (!canPass || _botThinking) return;
-    state.endTurn(humanId);
     notifyListeners();
     _runBotsIfNeeded();
   }

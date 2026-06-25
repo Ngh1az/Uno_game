@@ -23,16 +23,14 @@ class _HomeTitleCardState extends State<HomeTitleCard>
 
   Color _brightBadge(Color color) => Color.lerp(color, Colors.white, 0.45)!;
 
-  static const _labelStyle = TextStyle(
-    color: Color(0xFFF8F8F8),
-    fontSize: 10,
-    fontWeight: FontWeight.w800,
-    letterSpacing: 1.4,
-    shadows: [
-      Shadow(color: Color(0x99FFD54F), blurRadius: 8),
-      Shadow(color: Color(0x88000000), blurRadius: 2, offset: Offset(0, 1)),
-    ],
-  );
+  static Widget _label() => const TitleNamePlain(
+        name: 'DANH HIỆU',
+        tier: TitleTier.elite,
+        accent: _gold,
+        fontSize: 10,
+        letterSpacing: 1.4,
+        shimmer: true,
+      );
 
   late final AnimationController _sparkle;
 
@@ -104,7 +102,7 @@ class _HomeTitleCardState extends State<HomeTitleCard>
     final elite = _isElite(equipped);
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
@@ -211,16 +209,16 @@ class _HomeTitleCardState extends State<HomeTitleCard>
                     ),
                   Positioned(
                     top: 0,
-                    left: 16,
-                    right: 16,
-                    height: 36,
+                    left: 0,
+                    right: 0,
+                    height: 28,
                     child: DecoratedBox(
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
                           begin: Alignment.topCenter,
                           end: Alignment.bottomCenter,
                           colors: [
-                            Colors.white.withValues(alpha: 0.14),
+                            Colors.white.withValues(alpha: 0.08),
                             Colors.transparent,
                           ],
                         ),
@@ -317,27 +315,12 @@ class _HomeTitleCardState extends State<HomeTitleCard>
           decoration: BoxDecoration(
             gradient: RadialGradient(
               center: Alignment.center,
-              radius: 1.15,
+              radius: 1.25,
               colors: [
                 Colors.transparent,
-                Colors.black.withValues(alpha: elite ? 0.22 : 0.16),
+                Colors.black.withValues(alpha: elite ? 0.14 : 0.08),
               ],
-              stops: const [0.52, 1.0],
-            ),
-          ),
-        ),
-      ),
-      Positioned.fill(
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.centerRight,
-              end: Alignment.centerLeft,
-              colors: [
-                Colors.black.withValues(alpha: 0.14),
-                Colors.transparent,
-              ],
-              stops: const [0.0, 0.5],
+              stops: const [0.72, 1.0],
             ),
           ),
         ),
@@ -460,7 +443,7 @@ class _HomeTitleCardState extends State<HomeTitleCard>
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('DANH HIỆU', style: _labelStyle),
+              _label(),
               const SizedBox(height: 4),
               const Text(
                 'Khám phá ngay',
@@ -496,10 +479,10 @@ class _HomeTitleCardState extends State<HomeTitleCard>
 
   Widget _titleHero(TitleDefinition title) {
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
-        const Text('DANH HIỆU', style: _labelStyle),
+        _label(),
         const SizedBox(height: 4),
         TitleNameText(
           title: title,
@@ -512,12 +495,11 @@ class _HomeTitleCardState extends State<HomeTitleCard>
         ),
         const SizedBox(height: 7),
         Container(
-          width: 56,
           height: 3,
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(2),
             gradient: LinearGradient(
-              colors: [title.color, title.color.withValues(alpha: 0.2)],
+              colors: [title.color, title.color.withValues(alpha: 0.08)],
             ),
             boxShadow: [
               BoxShadow(
