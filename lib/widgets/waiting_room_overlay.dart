@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -5,6 +7,7 @@ import '../navigation/app_navigator.dart';
 import '../online/waiting_room_session.dart';
 import '../screens/online/room_screen.dart';
 import 'app_snack.dart';
+import 'game/game_premium_dialog.dart';
 import 'game/game_theme.dart';
 
 const _prefsKey = 'waiting_room_banner_pos_v1';
@@ -78,6 +81,13 @@ class _WaitingRoomOverlayState extends State<WaitingRoomOverlay> {
       _session.clearRoomClosedFlag();
       setState(() => _expanded = false);
       AppSnack.info(ctx, 'Phòng đã đóng.');
+      return;
+    }
+
+    if (_session.kickedWhileAway) {
+      _session.clearKickedFlag();
+      setState(() => _expanded = false);
+      unawaited(GamePremiumDialog.showKicked(ctx));
       return;
     }
 

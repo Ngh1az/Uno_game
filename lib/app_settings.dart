@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -16,6 +18,9 @@ class AppSettings extends ChangeNotifier {
   static const _keyCardAnimations = 'cardAnimations';
   static const _keyDefaultBotCount = 'defaultBotCount';
   static const _keyBotSpeed = 'botSpeed';
+  static const _keyNotificationsEnabled = 'notificationsEnabled';
+  static const _keyRoomInviteNotifications = 'roomInviteNotifications';
+  static const _keyTurnNotifications = 'turnNotifications';
 
   bool _loaded = false;
 
@@ -66,6 +71,12 @@ class AppSettings extends ChangeNotifier {
       );
     }
     defaultBotCount = defaultBotCount.clamp(GameLimits.minBots, GameLimits.maxBots);
+    notificationsEnabled =
+        prefs.getBool(_keyNotificationsEnabled) ?? notificationsEnabled;
+    roomInviteNotifications = prefs.getBool(_keyRoomInviteNotifications) ??
+        roomInviteNotifications;
+    turnNotifications =
+        prefs.getBool(_keyTurnNotifications) ?? turnNotifications;
     _loaded = true;
     notifyListeners();
   }
@@ -104,22 +115,32 @@ class AppSettings extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> _persistNotificationSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyNotificationsEnabled, notificationsEnabled);
+    await prefs.setBool(_keyRoomInviteNotifications, roomInviteNotifications);
+    await prefs.setBool(_keyTurnNotifications, turnNotifications);
+  }
+
   void setNotificationsEnabled(bool value) {
     if (notificationsEnabled == value) return;
     notificationsEnabled = value;
     notifyListeners();
+    unawaited(_persistNotificationSettings());
   }
 
   void setRoomInviteNotifications(bool value) {
     if (roomInviteNotifications == value) return;
     roomInviteNotifications = value;
     notifyListeners();
+    unawaited(_persistNotificationSettings());
   }
 
   void setTurnNotifications(bool value) {
     if (turnNotifications == value) return;
     turnNotifications = value;
     notifyListeners();
+    unawaited(_persistNotificationSettings());
   }
 
   void setLanguage(String code) {

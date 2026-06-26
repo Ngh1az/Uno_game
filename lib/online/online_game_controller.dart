@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import '../models/game_state.dart';
 import '../models/uno_card.dart';
 import '../models/uno_player.dart';
+import '../game/turn_timeout_policy.dart';
 import 'room.dart';
 import 'room_service.dart';
 
@@ -19,6 +20,7 @@ class OnlineGameController extends ChangeNotifier {
   StreamSubscription<Room?>? _sub;
   Room? _room;
   String? _error;
+  bool _ghostHostRepairAttempted = false;
 
   Room? get room => _room;
   String? get error => _error;
@@ -30,10 +32,29 @@ class OnlineGameController extends ChangeNotifier {
   bool get isPlaying => _room?.status == RoomStatus.playing;
   bool get isFinished => _room?.status == RoomStatus.finished;
   bool get isWaiting => _room?.status == RoomStatus.waiting;
-  bool get isHost => _room != null && _room!.hostId == uid;
+  bool get isHost {
+    final room = _room;
+    if (room == null || uid.isEmpty) return false;
+    if (room.hostId == uid) return true;
+    // Host đã rời nhưng hostId chưa được cập nhật trên Firestore.
+    if (room.players.isNotEmpty &&
+        !room.players.any((p) => p.id == room.hostId)) {
+      return room.players.first.id == uid;
+    }
+    return false;
+  }
 
-  UnoPlayer? get me =>
-      game?.players.firstWhere((p) => p.id == uid, orElse: () => game!.players.first);
+  bool get isMember =>
+      _room != null && _room!.players.any((p) => p.id == uid);
+
+  UnoPlayer? get me {
+    final g = game;
+    if (g == null || uid.isEmpty) return null;
+    for (final p in g.players) {
+      if (p.id == uid) return p;
+    }
+    return null;
+  }
 
   bool get isMyTurn =>
       isPlaying && game != null && game!.currentPlayer.id == uid;
@@ -42,11 +63,32 @@ class OnlineGameController extends ChangeNotifier {
 
   /// Bắt đầu lắng nghe phòng.
   void start() {
+    _ghostHostRepairAttempted = false;
     _sub = _service.watchRoom(code).listen((room) {
       _room = room;
+      if (room != null &&
+          _hasGhostHost(room) &&
+          !_ghostHostRepairAttempted) {
+        _ghostHostRepairAttempted = true;
+        unawaited(_repairGhostHostSafe());
+      }
       notifyListeners();
     });
   }
+
+  Future<void> _repairGhostHostSafe() async {
+    try {
+      await _service.repairGhostHost(code);
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('repairGhostHost failed for $code: $e');
+      }
+    }
+  }
+
+  bool _hasGhostHost(Room room) =>
+      room.players.isNotEmpty &&
+      !room.players.any((p) => p.id == room.hostId);
 
   bool canPlay(UnoCard card) =>
       isMyTurn && game != null && game!.canPlay(card);
@@ -58,6 +100,7 @@ class OnlineGameController extends ChangeNotifier {
     CardColor? chosenColor,
     int? handIndex,
     bool declaredUno = false,
+    bool autoUno = false,
   }) =>
       _guard(() => _service.playCard(
             code,
@@ -65,6 +108,7 @@ class OnlineGameController extends ChangeNotifier {
             chosenColor: chosenColor,
             handIndex: handIndex,
             declaredUno: declaredUno,
+            autoUno: autoUno,
           ));
 
   Future<void> drawCard() => _guard(() => _service.drawCard(code));
@@ -82,6 +126,35 @@ class OnlineGameController extends ChangeNotifier {
   Future<void> leave() async {
     await _service.leaveRoom(code);
   }
+
+  Future<void> kickPlayer(String targetId) async {
+    try {
+      _error = null;
+      await _service.kickPlayer(code, targetId);
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      rethrow;
+    }
+  }
+
+  Future<void> enforceTurnTimeout({bool autoUno = true}) =>
+      _guard(() => _service.enforceTurnTimeout(code, autoUno: autoUno));
+
+  Future<void> enforceAfkForfeit(String targetId) =>
+      _guard(() => _service.enforceAfkForfeit(code, targetId));
+
+  Duration? get turnTimeRemaining {
+    final started = _room?.turnStartedAt;
+    if (started == null || !isPlaying) return null;
+    final remaining = TurnTimeoutPolicy.turnDuration -
+        DateTime.now().difference(started);
+    if (remaining.isNegative) return Duration.zero;
+    return remaining;
+  }
+
+  int timeoutStrikesFor(String playerId) =>
+      game?.timeoutStrikeCount(playerId) ?? 0;
 
   Future<void> _guard(Future<void> Function() action) async {
     try {

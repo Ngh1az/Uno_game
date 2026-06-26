@@ -1,9 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../../app_settings.dart';
+import '../../notifications/in_app_notifications.dart';
 import '../../daily_quests/daily_quest_store.dart';
 import '../../friends/friends_service.dart';
 import '../../models/game_state.dart';
@@ -11,6 +11,8 @@ import '../../models/uno_card.dart';
 import '../../models/uno_player.dart';
 import '../../online/online_game_controller.dart';
 import '../../online/auth_service.dart';
+import '../../online/turn_timeout_watcher.dart';
+import '../../game/turn_timeout_policy.dart';
 import '../../online/waiting_room_session.dart';
 import '../../titles/title_store.dart';
 import '../../widgets/app_snack.dart';
@@ -29,17 +31,12 @@ import '../../widgets/game/game_table_shell.dart';
 import '../../widgets/game/game_theme.dart';
 import '../../widgets/google_account_gate.dart';
 import '../../widgets/invite_friends_sheet.dart';
-import '../../widgets/lobby_friend_button.dart';
+import '../../widgets/room_players_sheet.dart';
 import '../../widgets/game/opponent_chip_density.dart';
-import '../../widgets/settings_sheet.dart';
 import '../../online/room.dart';
-import '../../titles/title_definition.dart';
-import '../../widgets/title_name_text.dart';
-import '../../widgets/user_avatar.dart';
-import '../../widgets/game/title_mini_badge.dart';
-import '../../widgets/uno_circle_button.dart';
-
-/// Màn hình phòng online: sảnh chờ + bàn chơi premium đỏ–vàng.
+import '../../online/room_service.dart';
+import '../../widgets/settings_sheet.dart';
+import 'waiting_room_lobby.dart';
 class RoomScreen extends StatefulWidget {
   final String code;
   const RoomScreen({super.key, required this.code});
@@ -48,34 +45,45 @@ class RoomScreen extends StatefulWidget {
   State<RoomScreen> createState() => _RoomScreenState();
 }
 
-class _RoomScreenState extends State<RoomScreen> {
+class _RoomScreenState extends State<RoomScreen> with WidgetsBindingObserver {
   late final OnlineGameController _c;
   final _eventFeedback = GameEventFeedback();
   final _discardKey = GlobalKey();
   final _drawKey = GlobalKey();
   final _drawFlyKey = GlobalKey();
+  final _introHandKey = GlobalKey();
   final _handKey = GlobalKey();
-  final _flyAnchorKey = GlobalKey();
   final _motionKey = GlobalKey<GameCardMotionLayerState>();
   final _handCounts = <String, int>{};
   final _intro = GameMatchIntroController();
   final _opponentKeys = <String, GlobalKey>{};
   bool _winShown = false;
+  bool _playQuestRecorded = false;
   bool _suppressPlayAnim = false;
   bool _suppressDrawAnim = false;
   bool _introSeqRunning = false;
-  UnoCard? _animatingCard;
-  int? _flyingHandIndex;
-  List<UnoCard>? _frozenHand;
+  int? _selectedHandIndex;
   String? _lastError;
   RoomStatus? _lastRoomStatus;
   int? _introBaselineLogLength;
   String? _introBaselineTopCard;
+  bool _wasMyTurn = false;
+  bool _away = false;
+  bool _kickedHandled = false;
+  int _handResetToken = 0;
+  late final TurnTimeoutWatcher _timeoutWatcher;
+  Timer? _countdownTimer;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _c = WaitingRoomSession.instance.bind(widget.code);
+    _timeoutWatcher = TurnTimeoutWatcher(controller: _c);
+    _timeoutWatcher.start();
+    _countdownTimer = Timer.periodic(TurnTimeoutPolicy.countdownTick, (_) {
+      if (mounted && _c.isPlaying) setState(() {});
+    });
     WaitingRoomSession.instance.setRoomScreenVisible(true);
     _c.addListener(_onChange);
     _intro.addListener(_onIntroChange);
@@ -91,7 +99,22 @@ class _RoomScreenState extends State<RoomScreen> {
   }
 
   void _onIntroChange() {
+    if (_intro.isDone) {
+      _resetHandUiState();
+      _handResetToken++;
+    }
     if (mounted) setState(() {});
+  }
+
+  void _resetHandUiState() {
+    _selectedHandIndex = null;
+    _suppressPlayAnim = false;
+    _suppressDrawAnim = false;
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _away = state != AppLifecycleState.resumed;
   }
 
   void _onChange() {
@@ -108,15 +131,27 @@ class _RoomScreenState extends State<RoomScreen> {
     final game = _c.game;
     final status = _c.room?.status;
 
+    if (_c.room != null && !_c.isMember) {
+      if (WaitingRoomSession.instance.leavingVoluntarily) return;
+      if (!_kickedHandled) {
+        _kickedHandled = true;
+        _winShown = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          unawaited(_handleKicked());
+        });
+      }
+      return;
+    }
+
     if (game != null && _c.isPlaying) {
       if (_intro.blocksInteraction) {
         _checkIntroFastForward(game);
       }
-      if (_intro.isDone) {
+      if (_intro.isDone && _c.isMember) {
         _eventFeedback.onLogChanged(context, game.log);
-        _detectOpponentMotion(game);
+        _detectCardMotion(game);
       }
-    } else if (game != null) {
+    } else if (game != null && _c.isMember) {
       _eventFeedback.onLogChanged(context, game.log);
     }
 
@@ -124,19 +159,51 @@ class _RoomScreenState extends State<RoomScreen> {
       final shouldTrigger = _lastRoomStatus == RoomStatus.waiting ||
           _lastRoomStatus == RoomStatus.finished;
       if (shouldTrigger) {
+        _playQuestRecorded = false;
+        _winShown = false;
+        _resetHandUiState();
+        final fp = GameMatchIntroController.fingerprint(game);
+        if (!_intro.hasCompleted(fp) && !_introSeqRunning) {
+          _intro.begin(fp, game.players.map((p) => p.id).toList());
+          _introBaselineLogLength = game.log.length;
+          _introBaselineTopCard = game.topCard.label;
+        }
         unawaited(_maybeStartIntro(game));
       }
     }
     _lastRoomStatus = status ?? _lastRoomStatus;
 
-    if (_c.isFinished && !_winShown) {
+    if (_c.isFinished && !_playQuestRecorded && _c.isMember) {
+      _playQuestRecorded = true;
+      DailyQuestStore.instance.markOnlinePlay();
+      TitleStore.instance.recordOnlinePlay();
+    }
+
+    if (_c.isFinished && !_winShown && _c.isMember) {
       _winShown = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         _showWinDialog();
       });
     }
-    if (_c.isPlaying) _winShown = false;
+    if (_c.isPlaying) {
+      _winShown = false;
+      if (!_c.isMyTurn) _selectedHandIndex = null;
+      final myTurn =
+          _c.isMyTurn && _intro.isDone && !_intro.blocksInteraction;
+      final away = _away || InAppNotifications.appInBackground;
+      if (myTurn && !_wasMyTurn && away && game != null) {
+        final turnKey =
+            '${widget.code}-${game.log.length}-${game.currentPlayer.id}';
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          InAppNotifications.notifyMyTurn(context, turnKey: turnKey);
+        });
+      }
+      _wasMyTurn = myTurn;
+    } else {
+      _wasMyTurn = false;
+    }
     setState(() {});
   }
 
@@ -144,21 +211,24 @@ class _RoomScreenState extends State<RoomScreen> {
     final baseLog = _introBaselineLogLength;
     if (baseLog != null && game.log.length > baseLog) {
       _intro.fastForward();
+      _resetHandUiState();
       return;
     }
     final baseTop = _introBaselineTopCard;
     if (baseTop != null && game.topCard.label != baseTop) {
       _intro.fastForward();
+      _resetHandUiState();
     }
   }
 
   Future<void> _maybeStartIntro(GameState game) async {
     final fp = GameMatchIntroController.fingerprint(game);
-    if (_intro.hasCompleted(fp) || _intro.isActive || _introSeqRunning) return;
+    if (_intro.hasCompleted(fp) || _introSeqRunning) return;
 
     if (WaitingRoomSession.instance.gameStartedWhileMinimized) {
       WaitingRoomSession.instance.clearGameStartedFlag();
       _intro.markCompleted(fp);
+      _resetHandUiState();
       _snapshotHands(game);
       return;
     }
@@ -170,9 +240,12 @@ class _RoomScreenState extends State<RoomScreen> {
     if (_introSeqRunning) return;
     _introSeqRunning = true;
 
-    _intro.begin(fp, game.players.map((p) => p.id).toList());
-    _introBaselineLogLength = game.log.length;
-    _introBaselineTopCard = game.topCard.label;
+    _resetHandUiState();
+    if (!_intro.isActive || _intro.activeFingerprint != fp) {
+      _intro.begin(fp, game.players.map((p) => p.id).toList());
+      _introBaselineLogLength = game.log.length;
+      _introBaselineTopCard = game.topCard.label;
+    }
     _snapshotHands(game);
 
     try {
@@ -191,7 +264,7 @@ class _RoomScreenState extends State<RoomScreen> {
           game: game,
           myUid: _c.uid,
           drawKey: _drawFlyKey,
-          handKey: _handKey,
+          handKey: _introHandKey,
           opponentKeys: _opponentKeysFor(game),
           pileWidth: pileW,
           viewportWidth: MediaQuery.sizeOf(context).width,
@@ -207,6 +280,7 @@ class _RoomScreenState extends State<RoomScreen> {
 
       if (!mounted) return;
       if (!_intro.isDone) _intro.markDone();
+      _resetHandUiState();
     } finally {
       _introSeqRunning = false;
       if (mounted) setState(() {});
@@ -225,7 +299,12 @@ class _RoomScreenState extends State<RoomScreen> {
 
   @override
   void dispose() {
-    _c.removeListener(_onChange);
+    _countdownTimer?.cancel();
+    _timeoutWatcher.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    if (WaitingRoomSession.instance.controller == _c) {
+      _c.removeListener(_onChange);
+    }
     _intro.removeListener(_onIntroChange);
     WaitingRoomSession.instance.setRoomScreenVisible(false);
     super.dispose();
@@ -245,7 +324,7 @@ class _RoomScreenState extends State<RoomScreen> {
       ..addEntries(state.players.map((p) => MapEntry(p.id, p.hand.length)));
   }
 
-  void _detectOpponentMotion(GameState state) {
+  void _detectCardMotion(GameState state) {
     if (_intro.blocksInteraction) return;
 
     if (_handCounts.isEmpty) {
@@ -256,9 +335,16 @@ class _RoomScreenState extends State<RoomScreen> {
     for (final player in state.players) {
       final prev = _handCounts[player.id] ?? player.hand.length;
       if (player.hand.length == prev - 1 && !_suppressPlayAnim) {
+        final isSelf = player.id == _c.uid;
+        final card = state.topCard;
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted) return;
-          _animateOpponentPlay(player, state.topCard);
+          if (isSelf) {
+            setState(() => _selectedHandIndex = null);
+            unawaited(_animateSelfPlay(card));
+          } else {
+            unawaited(_animateOpponentPlay(player, card));
+          }
         });
         break;
       }
@@ -276,6 +362,24 @@ class _RoomScreenState extends State<RoomScreen> {
     _suppressPlayAnim = false;
     _suppressDrawAnim = false;
     _snapshotHands(state);
+  }
+
+  Future<void> _animateSelfPlay(UnoCard card) async {
+    final motion = _useCardMotion ? _motion : null;
+    if (motion == null) return;
+
+    final layout = GameHandLayout.compute(
+      viewportWidth: MediaQuery.sizeOf(context).width,
+      cardCount: _c.me?.hand.length ?? 1,
+    );
+    final from = GameCardMotionLayerState.centerOf(_handKey);
+    final to = GameCardMotionLayerState.centerOf(_discardKey);
+    await motion.fly(
+      card: card,
+      from: from,
+      to: to,
+      width: layout.cardWidth,
+    );
   }
 
   Future<void> _animateOpponentPlay(UnoPlayer player, UnoCard card) async {
@@ -327,13 +431,14 @@ class _RoomScreenState extends State<RoomScreen> {
       return;
     }
 
+    final screenSize = MediaQuery.sizeOf(context);
     await WidgetsBinding.instance.endOfFrame;
     final from = GameCardMotionLayerState.centerOf(_drawKey);
     final to = GameCardMotionLayerState.centerOf(
       _handKey,
       fallback: Offset(
-        MediaQuery.sizeOf(context).width / 2,
-        MediaQuery.sizeOf(context).height - 120,
+        screenSize.width / 2,
+        screenSize.height - 120,
       ),
     );
 
@@ -342,7 +447,7 @@ class _RoomScreenState extends State<RoomScreen> {
       card: game.topCard,
       from: from,
       to: to,
-      width: GameTheme.pileWidthFor(MediaQuery.sizeOf(context).width),
+      width: GameTheme.pileWidthFor(screenSize.width),
       faceDown: true,
       duration: const Duration(milliseconds: 400),
     );
@@ -354,33 +459,31 @@ class _RoomScreenState extends State<RoomScreen> {
     UnoCard card, {
     CardColor? chosenColor,
     required int handIndex,
+    Offset? fromGlobal,
   }) async {
     final game = _c.game;
     if (game == null) return;
 
-    final me = game.players.firstWhere((p) => p.id == _c.uid);
+    final me = _c.me;
+    if (me == null) return;
+
     if (handIndex < 0 || handIndex >= me.hand.length) return;
 
-    _frozenHand = List<UnoCard>.from(me.hand);
-    final flying = _frozenHand![handIndex];
-    _flyingHandIndex = handIndex;
+    _selectedHandIndex = null;
 
     final layout = GameHandLayout.compute(
       viewportWidth: MediaQuery.sizeOf(context).width,
-      cardCount: _frozenHand!.length,
+      cardCount: me.hand.length,
     );
     final motion = _useCardMotion ? _motion : null;
+    final from = fromGlobal ?? GameCardMotionLayerState.centerOf(_handKey);
 
     try {
       if (motion != null) {
-        setState(() => _animatingCard = flying);
-        await WidgetsBinding.instance.endOfFrame;
-
-        final from = GameCardMotionLayerState.centerOf(_flyAnchorKey);
-        final to = GameCardMotionLayerState.centerOf(_discardKey);
         _suppressPlayAnim = true;
+        final to = GameCardMotionLayerState.centerOf(_discardKey);
         await motion.fly(
-          card: flying,
+          card: card,
           from: from,
           to: to,
           width: layout.cardWidth,
@@ -390,28 +493,15 @@ class _RoomScreenState extends State<RoomScreen> {
         _suppressPlayAnim = true;
       }
 
-      final declaredUno = game.hasDeclaredUno(_c.uid) ||
-          (AppSettings.instance.autoUnoCall && me.hand.length == 2);
-      if (AppSettings.instance.autoUnoCall &&
-          me.hand.length == 2 &&
-          !game.hasDeclaredUno(_c.uid)) {
-        await _c.callUno();
-      }
-
       await _c.playCard(
-        flying,
+        card,
         chosenColor: chosenColor,
         handIndex: handIndex,
-        declaredUno: declaredUno,
+        declaredUno: game.hasDeclaredUno(_c.uid),
+        autoUno: AppSettings.instance.autoUnoCall,
       );
     } finally {
-      if (mounted) {
-        setState(() {
-          _animatingCard = null;
-          _flyingHandIndex = null;
-          _frozenHand = null;
-        });
-      }
+      _selectedHandIndex = null;
     }
   }
 
@@ -425,6 +515,50 @@ class _RoomScreenState extends State<RoomScreen> {
     await _c.catchUno(targetId);
   }
 
+  Future<void> _confirmKick(String targetId, String targetName) async {
+    final kick = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF2A0707),
+        title: const Text(
+          'Đuổi người chơi?',
+          style: TextStyle(color: GameTheme.gold),
+        ),
+        content: Text(
+          'Đuổi $targetName khỏi phòng?',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Huỷ'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Đuổi',
+              style: TextStyle(color: Color(0xFFFF5252)),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (kick != true || !mounted) return;
+    try {
+      await _c.kickPlayer(targetId);
+      if (mounted) {
+        AppSnack.info(context, 'Đã đuổi $targetName');
+      }
+    } catch (e) {
+      if (mounted) {
+        final msg = e is RoomException
+            ? e.message
+            : 'Không đuổi được người chơi.';
+        AppSnack.error(context, msg);
+      }
+    }
+  }
+
   Future<void> _confirmLeave({required bool inGame}) async {
     final leave = await GamePremiumDialog.confirmLeave(
       context,
@@ -435,7 +569,15 @@ class _RoomScreenState extends State<RoomScreen> {
       confirmLabel: inGame ? 'Rời ván' : 'Rời phòng',
     );
     if (!leave || !mounted) return;
-    await WaitingRoomSession.instance.leave();
+    try {
+      await WaitingRoomSession.instance.leave();
+    } catch (e) {
+      if (mounted) {
+        AppSnack.error(context, 'Không rời được phòng. Thử lại.');
+      }
+      return;
+    }
+    _kickedHandled = true;
     if (mounted) Navigator.of(context).pop();
   }
 
@@ -505,6 +647,19 @@ class _RoomScreenState extends State<RoomScreen> {
     );
   }
 
+  Future<void> _openPlayersSheet() async {
+    final room = _c.room;
+    if (room == null) return;
+    await RoomPlayersSheet.show(
+      context,
+      room: room,
+      myUid: _c.uid,
+      isHost: _c.isHost,
+      game: _c.game,
+      onKick: _c.isHost ? _confirmKick : null,
+    );
+  }
+
   Future<void> _openInviteFriends() async {
     if (!await requireGoogleAccount(context)) return;
     if (!mounted) return;
@@ -513,214 +668,14 @@ class _RoomScreenState extends State<RoomScreen> {
 
   Widget _waitingView() {
     final room = _c.room!;
-    return Padding(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          SizedBox(
-            height: 44,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: UnoCircleButton(
-                    icon: Icons.arrow_back,
-                    label: '',
-                    showLabel: false,
-                    size: 38,
-                    iconScale: 0.48,
-                    onTap: () => _confirmLeave(inGame: false),
-                  ),
-                ),
-                const TitleNamePlain(
-                  name: 'Phòng chờ',
-                  tier: TitleTier.elite,
-                  accent: GameTheme.gold,
-                  fontSize: 22,
-                  shimmer: true,
-                ),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: UnoCircleButton(
-                    icon: Icons.home_rounded,
-                    label: '',
-                    showLabel: false,
-                    size: 38,
-                    iconScale: 0.48,
-                    onTap: _minimizeToHome,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 8),
-          const Text('Mã phòng', style: TextStyle(color: Colors.white70)),
-          const SizedBox(height: 4),
-          GestureDetector(
-            onTap: () {
-              Clipboard.setData(ClipboardData(text: room.code));
-              AppSnack.info(
-                context,
-                'Đã sao chép mã phòng',
-                icon: Icons.content_copy_rounded,
-              );
-            },
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
-              decoration: BoxDecoration(
-                color: const Color(0xFFD32F2F),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: GameTheme.gold.withValues(alpha: 0.5)),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    room.code,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 34,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 8,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  const Icon(Icons.copy, color: Colors.white70, size: 20),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 14),
-          SizedBox(
-            width: double.infinity,
-            height: 46,
-            child: OutlinedButton.icon(
-              style: OutlinedButton.styleFrom(
-                foregroundColor: GameTheme.gold,
-                side: BorderSide(color: GameTheme.gold.withValues(alpha: 0.45)),
-              ),
-              onPressed: _openInviteFriends,
-              icon: const Icon(Icons.person_add_alt_1_rounded, size: 20),
-              label: const Text(
-                'Mời bạn bè',
-                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            'Người chơi (${room.players.length}/${room.maxPlayers})',
-            style: const TextStyle(color: Colors.white, fontSize: 16),
-          ),
-          const SizedBox(height: 8),
-          Expanded(
-            child: ListView(
-              children: [
-                for (final p in room.players)
-                  _lobbyPlayerTile(p, room),
-              ],
-            ),
-          ),
-          if (_c.isHost)
-            SizedBox(
-              width: double.infinity,
-              height: 52,
-              child: FilledButton(
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFFE53935),
-                  foregroundColor: GameTheme.gold,
-                ),
-                onPressed: room.players.length >= 2 ? _c.startGame : null,
-                child: Text(
-                  room.players.length >= 2
-                      ? 'Bắt đầu'
-                      : 'Cần ít nhất 2 người',
-                ),
-              ),
-            )
-          else
-            const Text(
-              'Đang chờ bắt đầu...',
-              style: TextStyle(color: Colors.white70),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _lobbyPlayerTile(RoomPlayer player, Room room) {
-    final isHost = player.id == room.hostId;
-
-    return Card(
-      color: isHost ? const Color(0xCC2A1208) : const Color(0xAA1A0505),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(
-          color: GameTheme.gold.withValues(alpha: isHost ? 0.62 : 0.25),
-          width: isHost ? 1.6 : 1,
-        ),
-      ),
-      child: ListTile(
-        leading: _lobbyPlayerAvatar(player, isHost: isHost),
-        title: Text(
-          player.name,
-          style: TextStyle(
-            color: isHost ? GameTheme.gold : Colors.white,
-            fontWeight: isHost ? FontWeight.w800 : FontWeight.w500,
-          ),
-        ),
-        trailing: _lobbyPlayerTrailing(player, room),
-      ),
-    );
-  }
-
-  Widget _lobbyPlayerTrailing(RoomPlayer player, Room room) {
-    if (player.id == _c.uid) return const SizedBox.shrink();
-
-    return LobbyFriendButton(targetUid: player.id, targetName: player.name);
-  }
-
-  Widget _lobbyPlayerAvatar(RoomPlayer player, {required bool isHost}) {
-    final title = player.equippedTitleId == null
-        ? null
-        : titleById(player.equippedTitleId!);
-
-    return SizedBox(
-      width: 48,
-      height: 48,
-      child: Stack(
-        clipBehavior: Clip.none,
-        alignment: Alignment.center,
-        children: [
-          Container(
-            padding: EdgeInsets.all(isHost ? 3 : 2),
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: GameTheme.gold.withValues(alpha: isHost ? 0.95 : 0.45),
-                width: isHost ? 2.2 : 1.5,
-              ),
-              boxShadow: isHost
-                  ? [
-                      BoxShadow(
-                        color: GameTheme.gold.withValues(alpha: 0.35),
-                        blurRadius: 10,
-                        spreadRadius: 1,
-                      ),
-                    ]
-                  : null,
-            ),
-            child: UserAvatar(
-              photoUrl: player.photoUrl,
-              displayName: player.name,
-              radius: 20,
-            ),
-          ),
-          if (title != null) TitleCornerBadge(title: title),
-        ],
-      ),
+    return WaitingRoomLobby(
+      room: room,
+      myUid: _c.uid,
+      isHost: _c.isHost,
+      onLeave: () => _confirmLeave(inGame: false),
+      onMinimizeHome: _minimizeToHome,
+      onInviteFriends: _openInviteFriends,
+      onStartGame: _c.startGame,
     );
   }
 
@@ -728,13 +683,16 @@ class _RoomScreenState extends State<RoomScreen> {
     final game = _c.game!;
     final room = _c.room!;
     final meId = _c.uid;
-    final opponents = game.players.where((p) => p.id != meId).toList();
+    final memberIds = room.players.map((p) => p.id).toSet();
+    final opponents = game.players
+        .where((p) => p.id != meId && memberIds.contains(p.id))
+        .toList();
     final profiles = {for (final p in room.players) p.id: p};
     final density = OpponentChipDensityX.forOpponentCount(opponents.length);
-    final me = game.players.firstWhere(
-      (p) => p.id == meId,
-      orElse: () => game.players.first,
-    );
+    final me = _c.me;
+    if (me == null) {
+      return _centered('Bạn đã bị.');
+    }
     final myTurn = _c.isMyTurn && !_introBlocksPlay;
     final settings = AppSettings.instance;
     final catchableId = game.catchableUnoPlayerId;
@@ -762,6 +720,7 @@ class _RoomScreenState extends State<RoomScreen> {
             : myTurn
                 ? 'Lượt của bạn'
                 : 'Lượt ${game.currentPlayer.name}';
+    final turnSecs = _c.turnTimeRemaining?.inSeconds;
 
     return AbsorbPointer(
       absorbing: _introBlocksPlay,
@@ -773,6 +732,8 @@ class _RoomScreenState extends State<RoomScreen> {
           game: game,
           onBack: () => _confirmLeave(inGame: true),
           onSettings: () => SettingsSheet.show(context),
+          onPlayersList: _openPlayersSheet,
+          showPlayersList: true,
           title: 'Phòng ${_c.code}',
         ),
         Padding(
@@ -836,6 +797,8 @@ class _RoomScreenState extends State<RoomScreen> {
               ? null
               : () => unawaited(_catchUno(catchableId)),
           drawStackCount: myTurn ? game.pendingDrawCount : 0,
+          turnSecondsRemaining:
+              !_introBlocksPlay && _c.isPlaying ? turnSecs : null,
         ),
         const SizedBox(height: 6),
         _myHand(me),
@@ -863,37 +826,81 @@ class _RoomScreenState extends State<RoomScreen> {
       return _introHandStrip(virtualCount);
     }
 
-    final hand = _frozenHand ?? me.hand;
     final myTurn = _c.isMyTurn && !_introBlocksPlay;
+    final layout = GameHandLayout.compute(
+      viewportWidth: MediaQuery.sizeOf(context).width,
+      cardCount: me.hand.length,
+    );
+    final handFp = _intro.activeFingerprint ??
+        (_c.game != null
+            ? GameMatchIntroController.fingerprint(_c.game!)
+            : 'hand');
 
-    return GamePlayerHandStrip(
+    return SizedBox(
       key: _handKey,
-      cards: hand,
-      isMyTurn: myTurn,
-      showHints: _showHints,
-      canPlay: _c.canPlay,
-      flyingHandIndex: _flyingHandIndex,
-      flyAnchorKey: _flyAnchorKey,
-      onCardTap: (card, index) => _onCardTap(card, index),
+      height: layout.totalHeight(me.hand.length),
+      width: double.infinity,
+      child: GamePlayerHandStrip(
+        key: ValueKey('hand-$handFp-${me.hand.length}'),
+        resetToken: _handResetToken,
+        cards: me.hand,
+        isMyTurn: myTurn,
+        showHints: _showHints,
+        canPlay: _c.canPlay,
+        selectedIndex: _selectedHandIndex,
+        onCardTap: (card, index, globalCenter) =>
+            _onCardTap(card, index, globalCenter),
+      ),
     );
   }
 
   Widget _introHandStrip(int cardCount) {
     return GameIntroHandStrip(
-      handKey: _handKey,
+      handKey: _introHandKey,
       cardCount: cardCount,
       viewportWidth: MediaQuery.sizeOf(context).width,
     );
   }
 
-  Future<void> _onCardTap(UnoCard card, int handIndex) async {
+  Future<void> _onCardTap(
+    UnoCard card,
+    int handIndex,
+    Offset globalCenter,
+  ) async {
     if (_introBlocksPlay) return;
+    if (_selectedHandIndex == handIndex) {
+      await _playSelectedCard(handIndex, fromGlobal: globalCenter);
+      return;
+    }
     if (!_c.canPlay(card)) {
       AppSnack.warning(
         context,
-        'Không thể đánh lá này / chưa tới lượt',
+        'Không thể chọn lá này / chưa tới lượt',
         duration: const Duration(milliseconds: 900),
       );
+      return;
+    }
+    setState(() => _selectedHandIndex = handIndex);
+  }
+
+  Future<void> _playSelectedCard(
+    int handIndex, {
+    Offset? fromGlobal,
+  }) async {
+    final me = _c.me;
+    if (me == null ||
+        handIndex < 0 ||
+        handIndex >= me.hand.length) {
+      AppSnack.warning(
+        context,
+        'Chọn lá bài trước',
+        duration: const Duration(milliseconds: 900),
+      );
+      return;
+    }
+    final card = me.hand[handIndex];
+    if (!_c.canPlay(card)) {
+      setState(() => _selectedHandIndex = null);
       return;
     }
     CardColor? chosen;
@@ -901,7 +908,28 @@ class _RoomScreenState extends State<RoomScreen> {
       chosen = await GamePremiumDialog.pickColor(context);
       if (chosen == null) return;
     }
-    await _playCardAnimated(card, chosenColor: chosen, handIndex: handIndex);
+    await _playCardAnimated(
+      card,
+      chosenColor: chosen,
+      handIndex: handIndex,
+      fromGlobal: fromGlobal,
+    );
+    if (mounted) setState(() => _selectedHandIndex = null);
+  }
+
+  Future<void> _handleKicked() async {
+    if (!mounted) return;
+    _timeoutWatcher.stop();
+    _eventFeedback.reset();
+    _c.removeListener(_onChange);
+    await WaitingRoomSession.instance.ejectLocal();
+    if (!mounted) return;
+    await GamePremiumDialog.showKicked(
+      context,
+      onLeave: () {
+        if (mounted) Navigator.of(context).pop();
+      },
+    );
   }
 
   void _showWinDialog() {
@@ -926,6 +954,9 @@ class _RoomScreenState extends State<RoomScreen> {
               _eventFeedback.reset();
               _handCounts.clear();
               _intro.reset();
+              _resetHandUiState();
+              _playQuestRecorded = false;
+              _winShown = false;
               _lastRoomStatus = RoomStatus.finished;
               _c.startGame();
             }

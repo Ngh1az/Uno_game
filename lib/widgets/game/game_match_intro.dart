@@ -5,7 +5,6 @@ import 'package:flutter/services.dart';
 
 import '../../models/game_state.dart';
 import '../../models/uno_card.dart';
-import '../../models/uno_player.dart';
 import 'game_card_motion.dart';
 import '../uno_card_widget.dart';
 import 'game_hand_layout.dart';
@@ -249,23 +248,24 @@ class GameMatchIntroRunner {
     for (var i = 0; i < handSize; i++) {
       if (controller.isDone) return;
 
-      final to = _handCardGlobalCenter(
+      final to = await _resolveHandSlotCenter(
         handKey: handKey,
         cardIndex: i,
         layout: handLayout,
       );
-      if (to == null) continue;
 
-      if (i == 0) unawaited(HapticFeedback.lightImpact());
-      await motion.fly(
-        card: _dummyDealCard,
-        from: from,
-        to: to,
-        width: pileWidth,
-        faceDown: true,
-        duration: const Duration(milliseconds: 200),
-      );
-      if (controller.isDone) return;
+      if (to != null) {
+        if (i == 0) unawaited(HapticFeedback.lightImpact());
+        await motion.fly(
+          card: _dummyDealCard,
+          from: from,
+          to: to,
+          width: pileWidth,
+          faceDown: true,
+          duration: const Duration(milliseconds: 200),
+        );
+        if (controller.isDone) return;
+      }
 
       controller.setVirtualCount(myUid, i + 1);
 
@@ -273,6 +273,9 @@ class GameMatchIntroRunner {
         await Future<void>.delayed(const Duration(milliseconds: 55));
       }
     }
+
+    controller.setVirtualCount(myUid, handSize);
+    controller.setOpponentCounts(handSize, myUid);
   }
 
   /// Lật lá khởi đầu từ chồng úp sang vị trí đống đánh (luật UNO).
@@ -281,8 +284,11 @@ class GameMatchIntroRunner {
     required UnoCard starterCard,
     required GlobalKey drawKey,
     required double pileWidth,
+    Duration pauseBeforeReveal = const Duration(milliseconds: 280),
   }) async {
     if (motion == null) return;
+
+    await Future<void>.delayed(pauseBeforeReveal);
 
     final from = await _resolveDrawOrigin(drawKey);
     if (from == null) return;
@@ -325,6 +331,23 @@ class GameMatchIntroRunner {
     return null;
   }
 
+  static Future<Offset?> _resolveHandSlotCenter({
+    required GlobalKey handKey,
+    required int cardIndex,
+    required GameHandLayout layout,
+  }) async {
+    for (var i = 0; i < 12; i++) {
+      final center = _handCardGlobalCenter(
+        handKey: handKey,
+        cardIndex: cardIndex,
+        layout: layout,
+      );
+      if (center != null) return center;
+      await WidgetsBinding.instance.endOfFrame;
+    }
+    return null;
+  }
+
   static Offset? _handCardGlobalCenter({
     required GlobalKey handKey,
     required int cardIndex,
@@ -335,10 +358,7 @@ class GameMatchIntroRunner {
     final box = ctx.findRenderObject() as RenderBox?;
     if (box == null || !box.hasSize) return null;
 
-    final local = Offset(
-      12 + cardIndex * (layout.cardWidth + layout.gap) + layout.cardWidth / 2,
-      10 + layout.stripHeight / 2,
-    );
+    final local = layout.slotLocalCenter(cardIndex, introStrip: true);
     return box.localToGlobal(local);
   }
 }
@@ -375,13 +395,20 @@ class GameIntroHandStrip extends StatelessWidget {
       ),
       child: cardCount == 0
           ? const SizedBox.shrink()
-          : ListView.separated(
+          : ListView.builder(
               scrollDirection: Axis.horizontal,
               physics: const NeverScrollableScrollPhysics(),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              padding: const EdgeInsets.symmetric(
+                horizontal: GameHandLayout.horizontalPadding,
+                vertical: GameHandLayout.introVerticalPadding,
+              ),
               itemCount: cardCount,
-              separatorBuilder: (_, _) => SizedBox(width: layout.gap),
-              itemBuilder: (_, _) => UnoCardBack(width: layout.cardWidth),
+              itemBuilder: (_, i) => Padding(
+                padding: EdgeInsets.only(
+                  right: i < cardCount - 1 ? layout.gap : 0,
+                ),
+                child: UnoCardBack(width: layout.cardWidth),
+              ),
             ),
     );
   }

@@ -14,6 +14,10 @@ abstract final class UserSession {
   static String? _activeUid;
   static bool _isGuestAccount = false;
 
+  /// `true` nếu lần đồng bộ cloud gần nhất thất bại (mạng / quyền) — UI có thể
+  /// cảnh báo người chơi rằng tiến độ có thể chưa được lưu lên đám mây.
+  static bool lastCloudSyncFailed = false;
+
   static String? get activeUid => _activeUid;
 
   static bool get syncsToCloud => _activeUid != null && !_isGuestAccount;
@@ -64,11 +68,14 @@ abstract final class UserSession {
     await TitleStore.instance.load(uid, email: email);
 
     if (!isGuest) {
-      await CloudProgressService.instance.sync(
+      final ok = await CloudProgressService.instance.sync(
         uid,
         displayName: u.displayName,
         photoUrl: u.photoURL,
       );
+      lastCloudSyncFailed = !ok;
+    } else {
+      lastCloudSyncFailed = false;
     }
   }
 

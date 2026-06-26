@@ -1,7 +1,6 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../daily_quests/daily_quest_store.dart';
@@ -240,6 +239,14 @@ class TitleStore extends ChangeNotifier {
   void recordOnlineJoin() {
     if (!_canWrite) return;
     onlineJoins++;
+    notifyListeners();
+    _save();
+    _checkAchievements();
+  }
+
+  void recordOnlinePlay() {
+    if (!_canWrite) return;
+    gamesPlayed++;
     notifyListeners();
     _save();
     _checkAchievements();

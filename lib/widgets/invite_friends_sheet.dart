@@ -42,6 +42,29 @@ class _InviteFriendsSheetState extends State<InviteFriendsSheet> {
 
   final _service = FriendsService();
   String? _busyUid;
+  Map<String, bool> _inActiveGame = {};
+  List<String> _playingCheckUids = const [];
+
+  void _schedulePlayingCheck(List<FriendProfile> friends) {
+    final uids = friends.map((f) => f.uid).toList();
+    if (_uidsMatch(uids, _playingCheckUids)) return;
+    _playingCheckUids = uids;
+    unawaited(_loadPlayingStates(uids));
+  }
+
+  static bool _uidsMatch(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  Future<void> _loadPlayingStates(List<String> uids) async {
+    final map = await _service.playingStatesFor(uids);
+    if (!mounted || !_uidsMatch(uids, _playingCheckUids)) return;
+    setState(() => _inActiveGame = map);
+  }
 
   Future<void> _inviteOnline(FriendProfile friend) async {
     setState(() => _busyUid = friend.uid);
@@ -162,6 +185,7 @@ class _InviteFriendsSheetState extends State<InviteFriendsSheet> {
                   );
                 }
                 final friends = snap.data!;
+                _schedulePlayingCheck(friends);
                 if (friends.isEmpty) {
                   return const SizedBox(
                     height: 100,
@@ -175,7 +199,6 @@ class _InviteFriendsSheetState extends State<InviteFriendsSheet> {
                   );
                 }
                 return ListView.separated(
-                  cacheExtent: 200,
                   itemCount: friends.length,
                   separatorBuilder: (_, _) => const SizedBox(height: 8),
                   itemBuilder: (context, i) => _friendTile(friends[i]),
@@ -191,7 +214,22 @@ class _InviteFriendsSheetState extends State<InviteFriendsSheet> {
 
   Widget _friendTile(FriendProfile friend) {
     final online = FriendsService.isFriendOnline(friend);
+    final inGame = _inActiveGame[friend.uid] ?? false;
+    final canInvite = online && !inGame;
     final busy = _busyUid == friend.uid;
+
+    Color statusColor;
+    String statusLabel;
+    if (inGame) {
+      statusColor = const Color(0xFFFFB74D);
+      statusLabel = 'Đang chơi';
+    } else if (online) {
+      statusColor = const Color(0xFF81C784);
+      statusLabel = 'Online';
+    } else {
+      statusColor = Colors.white38;
+      statusLabel = 'Offline';
+    }
 
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -220,14 +258,14 @@ class _InviteFriendsSheetState extends State<InviteFriendsSheet> {
               height: 8,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: online ? const Color(0xFF81C784) : Colors.white38,
+                color: statusColor,
               ),
             ),
             const SizedBox(width: 6),
             Text(
-              online ? 'Online' : 'Offline',
+              statusLabel,
               style: TextStyle(
-                color: online ? const Color(0xFF81C784) : Colors.white54,
+                color: statusColor,
                 fontSize: 12,
               ),
             ),
@@ -239,7 +277,7 @@ class _InviteFriendsSheetState extends State<InviteFriendsSheet> {
                 height: 24,
                 child: CircularProgressIndicator(strokeWidth: 2, color: _gold),
               )
-            : online
+            : canInvite
                 ? IconButton(
                     tooltip: 'Mời vào phòng',
                     onPressed: () => _inviteOnline(friend),
@@ -248,7 +286,16 @@ class _InviteFriendsSheetState extends State<InviteFriendsSheet> {
                       color: _gold,
                     ),
                   )
-                : IconButton(
+                : online
+                    ? IconButton(
+                        tooltip: 'Đang chơi — mời lại sau khi ván kết thúc',
+                        onPressed: null,
+                        icon: Icon(
+                          Icons.sports_esports_rounded,
+                          color: _gold.withValues(alpha: 0.35),
+                        ),
+                      )
+                    : IconButton(
                     tooltip: 'Chia sẻ mã phòng',
                     onPressed: () => _shareRoom(friendName: friend.displayName),
                     icon: const Icon(Icons.share_rounded, color: _gold),

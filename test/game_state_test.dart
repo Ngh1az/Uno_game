@@ -27,6 +27,17 @@ void main() {
     expect(g.status, GameStatus.playing);
   });
 
+  test('Tổng số lá sau chia bài vẫn đủ 108', () {
+    for (var seed = 0; seed < 20; seed++) {
+      final g = _newGame(seed: seed);
+      var total = g.discardPile.length + g.drawPile.length;
+      for (final p in g.players) {
+        total += p.hand.length;
+      }
+      expect(total, 108, reason: 'seed $seed');
+    }
+  });
+
   test('Không được đánh khi chưa tới lượt', () {
     final g = _newGame();
     final notTurn = g.players[1];
@@ -37,14 +48,20 @@ void main() {
   });
 
   test('Đánh lá hợp lệ sẽ chuyển lượt', () {
-    final g = _newGame();
-    final p1 = g.players[0];
-    final playable = g.playableCards(p1);
-    if (playable.isEmpty) return; // tuỳ seed; bỏ qua nếu bí bài
-    final card = playable.firstWhere((c) => !c.isWild, orElse: () => playable.first);
-    final before = g.currentPlayerIndex;
-    g.playCard(p1.id, card, chosenColor: card.isWild ? CardColor.red : null);
-    expect(g.currentPlayerIndex == before, isFalse);
+    GameState? played;
+    for (var seed = 0; seed < 30; seed++) {
+      final g = _newGame(seed: seed);
+      final p1 = g.players[0];
+      final playable = g.playableCards(p1);
+      if (playable.isEmpty) continue;
+      final card = playable.firstWhere((c) => !c.isWild, orElse: () => playable.first);
+      final before = g.currentPlayerIndex;
+      g.playCard(p1.id, card, chosenColor: card.isWild ? CardColor.red : null);
+      expect(g.currentPlayerIndex == before, isFalse);
+      played = g;
+      break;
+    }
+    expect(played, isNotNull, reason: 'Không tìm được seed có lá đánh được');
   });
 
   test('Lá Skip làm mất lượt người kế tiếp', () {
@@ -229,6 +246,34 @@ void main() {
     g.catchUno('p2', 'p1');
     expect(g.catchableUnoPlayerId, isNull);
     expect(players[0].hand.length, 3);
+  });
+
+  test('autoUno khi đánh 2→1 lá thì không bị bắt', () {
+    final players = [
+      UnoPlayer(id: 'p1', name: 'A'),
+      UnoPlayer(id: 'p2', name: 'B'),
+    ];
+    final penultimate =
+        const UnoCard(color: CardColor.red, type: CardType.number, number: 3);
+    players[0].hand.add(penultimate);
+    players[0].hand.add(
+      const UnoCard(color: CardColor.green, type: CardType.number, number: 8),
+    );
+    final g = GameState(
+      players: players,
+      drawPile: [const UnoCard(color: CardColor.blue, type: CardType.number, number: 1)],
+      discardPile: [
+        const UnoCard(color: CardColor.red, type: CardType.number, number: 2),
+      ],
+      currentPlayerIndex: 0,
+      direction: PlayDirection.clockwise,
+      activeColor: CardColor.red,
+      status: GameStatus.playing,
+    );
+
+    g.playCard('p1', penultimate, autoUno: true);
+    expect(g.catchableUnoPlayerId, isNull);
+    expect(g.log.any((l) => l.contains('hô UNO')), isTrue);
   });
 
   test('Hô UNO trước khi đánh lá áp chót thì không bị bắt', () {

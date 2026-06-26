@@ -9,6 +9,7 @@ import '../security/action_rate_limit.dart';
 import '../user/user_session.dart';
 import '../friends/presence_service.dart';
 import 'guest_session_store.dart';
+import 'waiting_room_session.dart';
 
 /// Quản lý đăng nhập: Google (GIS) hoặc khách (ẩn danh).
 class AuthService {
@@ -193,6 +194,9 @@ class AuthService {
 
   /// Đăng xuất — xóa phiên Firebase/Google và dữ liệu khách trên máy.
   Future<void> signOut() async {
+    try {
+      await WaitingRoomSession.instance.leave();
+    } catch (_) {}
     await PresenceService.instance.goOffline();
     await UserSession.deactivate();
     if (_googleInitialized) {

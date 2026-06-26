@@ -81,6 +81,12 @@ abstract final class ProgressBounds {
 
   static int clampStat(int value) => value.clamp(0, maxStat);
 
+  /// Bước tăng stat tiếp theo khi đẩy cloud (khớp delta Firestore rules).
+  static int statChunkStep(int current, int target, int maxDeltaPerWrite) {
+    if (current >= target) return 0;
+    return (target - current).clamp(1, maxDeltaPerWrite);
+  }
+
   static Set<String> clampUnlocked(Set<String> ids) {
     if (ids.length <= maxUnlockedTitles) return ids;
     return ids.take(maxUnlockedTitles).toSet();

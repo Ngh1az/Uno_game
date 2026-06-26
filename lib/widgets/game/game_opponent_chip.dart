@@ -6,7 +6,7 @@ import '../uno_card_widget.dart';
 import '../user_avatar.dart';
 import 'game_theme.dart';
 import 'opponent_chip_density.dart';
-import 'title_mini_badge.dart';
+import 'title_mini_badge.dart' show TitleCornerBadge;
 
 /// Chip đối thủ/bot: avatar + danh hiệu + tên + badge số lá.
 class GameOpponentChip extends StatelessWidget {
@@ -123,7 +123,6 @@ class GameOpponentChip extends StatelessWidget {
 
   Widget _buildHumanChip() {
     final title = equippedTitleId == null ? null : titleById(equippedTitleId!);
-    final showTitleText = title != null && density.showTitleText(isTurn);
     final name = _truncateName(player.name, density.nameMaxChars);
     final nameStyle = TextStyle(
       color: isTurn ? GameTheme.gold : Colors.white70,
@@ -138,12 +137,6 @@ class GameOpponentChip extends StatelessWidget {
         child: Column(
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
-          if (title != null)
-            TitleMiniBadge(
-              title: title,
-              showText: showTitleText,
-              maxChars: density.nameMaxChars,
-            ),
           AnimatedScale(
             scale: isTurn ? 1.05 : 1,
             duration: const Duration(milliseconds: 220),

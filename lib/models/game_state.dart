@@ -56,6 +56,9 @@ class GameState {
   /// Nhật ký các sự kiện (tiếng Việt) để hiển thị lên UI.
   final List<String> log;
 
+  /// Số lần hết giờ liên tiếp (online) — đủ [TurnTimeoutPolicy.maxStrikes] thì coi như rời ván.
+  final Map<String, int> timeoutStrikes;
+
   final Random _random;
 
   GameState({
@@ -72,12 +75,22 @@ class GameState {
     Set<String>? unoDeclaredBeforePlay,
     this.catchableUnoPlayerId,
     List<String>? log,
+    Map<String, int>? timeoutStrikes,
     Random? random,
   }) : unoDeclaredBeforePlay = unoDeclaredBeforePlay ?? <String>{},
        log = log ?? <String>[],
+       timeoutStrikes = timeoutStrikes ?? <String, int>{},
        _random = random ?? Random();
 
   bool hasDeclaredUno(String playerId) => unoDeclaredBeforePlay.contains(playerId);
+
+  int timeoutStrikeCount(String playerId) => timeoutStrikes[playerId] ?? 0;
+
+  void resetTimeoutStrike(String playerId) => timeoutStrikes.remove(playerId);
+
+  void incrementTimeoutStrike(String playerId) {
+    timeoutStrikes[playerId] = timeoutStrikeCount(playerId) + 1;
+  }
 
   bool get mustRespondToDrawStack => pendingDrawCount > 0;
 
@@ -206,6 +219,7 @@ class GameState {
 
   /// Đánh một lá bài.
   /// [declaredUno] true khi người chơi hô UNO cùng lúc đánh lá áp chót (2 → 1 lá).
+  /// [autoUno] true khi cài đặt "tự động gọi UNO" — engine tự coi là đã hô khi 2 → 1 lá.
   /// [chosenColor] bắt buộc khi đánh lá Wild / Wild +4.
   /// [handIndex] dùng khi có nhiều lá trùng màu/loại trong tay.
   void playCard(
@@ -214,6 +228,7 @@ class GameState {
     CardColor? chosenColor,
     int? handIndex,
     bool declaredUno = false,
+    bool autoUno = false,
   }) {
     _ensurePlaying();
     _ensureTurn(playerId);
@@ -255,11 +270,13 @@ class GameState {
     log.add('${player.name} đánh ${handCard.label}$colorNote.');
 
     if (handBefore == 2 && player.hand.length == 1) {
-      final declared =
-          declaredUno || unoDeclaredBeforePlay.remove(playerId);
+      final priorDeclared = unoDeclaredBeforePlay.remove(playerId);
+      final declared = declaredUno || priorDeclared || autoUno;
       if (!declared) {
         catchableUnoPlayerId = playerId;
         log.add('${player.name} quên hô UNO!');
+      } else if (autoUno && !priorDeclared && !declaredUno) {
+        log.add('${player.name} hô UNO!');
       }
     }
 
@@ -476,6 +493,7 @@ class GameState {
     'unoDeclaredBeforePlay': unoDeclaredBeforePlay.toList(),
     'catchableUnoPlayerId': catchableUnoPlayerId,
     'log': log,
+    'timeoutStrikes': timeoutStrikes,
   };
 
   factory GameState.fromJson(Map<String, dynamic> json) => GameState(
@@ -500,5 +518,8 @@ class GameState {
         .toSet(),
     catchableUnoPlayerId: json['catchableUnoPlayerId'] as String?,
     log: (json['log'] as List?)?.map((e) => e as String).toList(),
+    timeoutStrikes: (json['timeoutStrikes'] as Map?)?.map(
+      (k, v) => MapEntry(k as String, (v as num).toInt()),
+    ),
   );
 }

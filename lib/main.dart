@@ -1,7 +1,9 @@
-import 'package:device_preview/device_preview.dart';
+import 'debug/device_preview_binding.dart'
+    if (dart.library.js_interop) 'debug/device_preview_binding_web.dart';
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -10,13 +12,11 @@ import 'firebase_options.dart';
 import 'navigation/app_navigator.dart';
 import 'friends/presence_service.dart';
 import 'online/auth_service.dart';
+import 'online/waiting_room_session.dart';
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
 import 'widgets/room_invite_listener.dart';
 import 'widgets/waiting_room_overlay.dart';
-
-/// Chỉ preview khi dev trên trình duyệt (flutter run -d chrome / web-server).
-const bool kUseDevicePreview = kIsWeb && !kReleaseMode;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -30,14 +30,7 @@ Future<void> main() async {
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
   ]);
-  runApp(
-    kUseDevicePreview
-        ? DevicePreview(
-            enabled: true,
-            builder: (context) => const UnoApp(),
-          )
-        : const UnoApp(),
-  );
+  runAppWithPreview(const UnoApp());
 }
 
 class UnoApp extends StatefulWidget {
@@ -68,9 +61,11 @@ class _UnoAppState extends State<UnoApp> with WidgetsBindingObserver {
 
     switch (state) {
       case AppLifecycleState.paused:
-      case AppLifecycleState.detached:
       case AppLifecycleState.hidden:
         PresenceService.instance.goOffline();
+      case AppLifecycleState.detached:
+        PresenceService.instance.goOffline();
+        unawaited(WaitingRoomSession.instance.leave().catchError((_) {}));
       case AppLifecycleState.resumed:
         PresenceService.instance.start(uid);
       case AppLifecycleState.inactive:
@@ -84,8 +79,7 @@ class _UnoAppState extends State<UnoApp> with WidgetsBindingObserver {
       navigatorKey: rootNavigatorKey,
       title: 'UNO',
       debugShowCheckedModeBanner: false,
-      useInheritedMediaQuery: true,
-      locale: kUseDevicePreview ? DevicePreview.locale(context) : null,
+      locale: devicePreviewLocale(context),
       builder: (context, child) {
         final app = RoomInviteListener(
           navigatorKey: rootNavigatorKey,
@@ -93,9 +87,7 @@ class _UnoAppState extends State<UnoApp> with WidgetsBindingObserver {
             child: child ?? const SizedBox.shrink(),
           ),
         );
-        return kUseDevicePreview
-            ? DevicePreview.appBuilder(context, app)
-            : app;
+        return devicePreviewBuilder(context, app);
       },
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(

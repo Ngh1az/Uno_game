@@ -16,6 +16,7 @@ class GameStatusBar extends StatelessWidget {
     this.catchUnoLabel = 'Bắt UNO',
     this.onCatchUno,
     this.drawStackCount = 0,
+    this.turnSecondsRemaining,
   });
 
   final bool isMyTurn;
@@ -28,6 +29,7 @@ class GameStatusBar extends StatelessWidget {
   final String catchUnoLabel;
   final VoidCallback? onCatchUno;
   final int drawStackCount;
+  final int? turnSecondsRemaining;
 
   @override
   Widget build(BuildContext context) {
@@ -60,6 +62,10 @@ class GameStatusBar extends StatelessWidget {
               highlight: true,
               icon: Icons.layers_rounded,
             ),
+          ],
+          if (turnSecondsRemaining != null) ...[
+            const SizedBox(width: 8),
+            _timerPill(turnSecondsRemaining!),
           ],
         ],
       ),
@@ -96,6 +102,40 @@ class GameStatusBar extends StatelessWidget {
             style: TextStyle(
               color: highlight ? GameTheme.gold : Colors.white60,
               fontSize: 12,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _timerPill(int seconds) {
+    final urgent = seconds <= 10;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: urgent ? const Color(0xCC4A0000) : const Color(0xAA1A0505),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: urgent ? const Color(0xFFFF5252) : const Color(0x55FFFFFF),
+          width: urgent ? 1.5 : 1,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.timer_outlined,
+            color: urgent ? const Color(0xFFFF5252) : Colors.white60,
+            size: 14,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            '${seconds}s',
+            style: TextStyle(
+              color: urgent ? const Color(0xFFFF8A80) : Colors.white70,
+              fontSize: 11,
               fontWeight: FontWeight.w800,
             ),
           ),

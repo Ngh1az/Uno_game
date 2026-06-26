@@ -32,6 +32,7 @@ class GameEventFeedback {
 
   static bool _shouldShow(String line) {
     if (line.startsWith('Tới lượt')) return false;
+    if (line.contains('hết giờ')) return true;
     if (line.contains('đánh ') && !line.contains('Đảo')) {
       // Bỏ qua log đánh lá thường.
       if (!line.contains('Skip') &&
@@ -54,6 +55,7 @@ class GameEventFeedback {
   }
 
   static IconData _iconFor(String line) {
+    if (line.contains('hết giờ')) return Icons.timer_off_rounded;
     if (line.contains('THẮNG')) return Icons.emoji_events_rounded;
     if (line.contains('UNO')) return Icons.campaign_rounded;
     if (line.contains('Đảo')) return Icons.swap_horiz_rounded;

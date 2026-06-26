@@ -441,14 +441,17 @@ class _FriendsScreenState extends State<FriendsScreen>
                               try {
                                 await _service.acceptFriendRequest(req.id);
                                 if (mounted) {
-                                  AppSnack.info(context, 'Đã chấp nhận kết bạn');
+                                  AppSnack.info(
+                                      this.context, 'Đã chấp nhận kết bạn');
                                 }
                               } on FriendsException catch (e) {
-                                if (mounted) AppSnack.error(context, e.message);
+                                if (mounted) {
+                                  AppSnack.error(this.context, e.message);
+                                }
                               } catch (e) {
                                 if (mounted) {
                                   AppSnack.error(
-                                    context,
+                                    this.context,
                                     e is FirebaseException
                                         ? FriendsService.mapFirebaseError(e)
                                         : 'Không chấp nhận được lời mời.',
@@ -468,11 +471,13 @@ class _FriendsScreenState extends State<FriendsScreen>
                               try {
                                 await _service.declineFriendRequest(req.id);
                               } on FriendsException catch (e) {
-                                if (mounted) AppSnack.error(context, e.message);
+                                if (mounted) {
+                                  AppSnack.error(this.context, e.message);
+                                }
                               } catch (e) {
                                 if (mounted) {
                                   AppSnack.error(
-                                    context,
+                                    this.context,
                                     e is FirebaseException
                                         ? FriendsService.mapFirebaseError(e)
                                         : 'Không từ chối được lời mời.',

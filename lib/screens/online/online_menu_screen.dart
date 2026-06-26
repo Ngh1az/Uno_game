@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../../daily_quests/daily_quest_store.dart';
 import '../../titles/title_definition.dart';
 import '../../titles/title_store.dart';
+import '../../friends/active_room_tracker.dart';
+import '../../friends/friends_service.dart';
 import '../../online/auth_service.dart';
 import '../../online/room_service.dart';
 import '../../online/waiting_room_session.dart';
@@ -46,6 +48,17 @@ class _OnlineMenuScreenState extends State<OnlineMenuScreen> {
       _error = null;
     });
     try {
+      final myUid = _service.uid;
+      if (myUid.isNotEmpty &&
+          await FriendsService().isUserInActiveGame(myUid)) {
+        // Dọn stale tracker nếu phòng cũ đã không còn user.
+        await ActiveRoomTracker.instance.clear(myUid);
+        if (await FriendsService().isUserInActiveGame(myUid)) {
+          throw RoomException(
+            'Bạn đang chơi ván. Rời ván hoặc chờ kết thúc trước khi vào phòng khác.',
+          );
+        }
+      }
       final code = await action();
       if (!mounted) return;
       DailyQuestStore.instance.markOnlineJoin();

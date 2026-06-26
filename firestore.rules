@@ -26,13 +26,18 @@ service cloud.firestore {
         && playerIds(request.resource.data).size()
             == playerIds(resource.data).size() + 1
         && request.resource.data.players.size()
-            == resource.data.players.size() + 1;
+            == resource.data.players.size() + 1
+        && unchangedRoomMeta()
+        && request.resource.data.get('hostId', '')
+            == resource.data.get('hostId', '')
+        && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['players', 'playerIds', 'code', 'maxPlayers', 'hostId', 'status']);
     }
 
     function profileFields() {
       return [
         'displayName', 'photoUrl', 'lastActiveAt', 'isOnline', 'activeRoomCode',
-        'updatedAt', 'friendCode', 'equippedTitle'
+        'activeRoomStatus', 'updatedAt', 'friendCode', 'equippedTitle'
       ];
     }
 
@@ -43,17 +48,21 @@ service cloud.firestore {
       ];
     }
 
+    function allowedUserFields() {
+      return profileFields().concat(progressFields()).concat(['quests']);
+    }
+
     function validUserCreate() {
       return request.resource.data.get('coins', 0) >= 0
-        && request.resource.data.get('coins', 0) <= 500
+        && request.resource.data.get('coins', 0) <= 200000
         && request.resource.data.get('gamesPlayed', 0) >= 0
-        && request.resource.data.get('gamesPlayed', 0) <= 50
+        && request.resource.data.get('gamesPlayed', 0) <= 100000
         && request.resource.data.get('offlineWins', 0) >= 0
-        && request.resource.data.get('offlineWins', 0) <= 50
+        && request.resource.data.get('offlineWins', 0) <= 100000
         && request.resource.data.get('onlineJoins', 0) >= 0
-        && request.resource.data.get('onlineJoins', 0) <= 50
+        && request.resource.data.get('onlineJoins', 0) <= 100000
         && request.resource.data.get('onlineWins', 0) >= 0
-        && request.resource.data.get('onlineWins', 0) <= 50;
+        && request.resource.data.get('onlineWins', 0) <= 100000;
     }
 
     function validProgressDelta() {
@@ -101,6 +110,11 @@ service cloud.firestore {
       return !hasProgress || (coinsOk && gpOk && owOk && ojOk && ow2Ok && titlesOk);
     }
 
+    function validUserUpdate() {
+      let affected = request.resource.data.diff(resource.data).affectedKeys();
+      return affected.hasOnly(allowedUserFields()) && validProgressDelta();
+    }
+
     function validFriendRequestUpdate() {
       return resource.data.status == 'pending'
         && request.resource.data.fromUid == resource.data.fromUid
@@ -126,10 +140,186 @@ service cloud.firestore {
         && request.resource.data.members.size() == 2
         && reqId != ''
         && exists(reqPath)
-        // get() trong transaction không thấy update cùng batch → chấp nhận pending hoặc accepted.
         && req.toUid == request.auth.uid
         && req.status in ['pending', 'accepted']
         && request.resource.data.members.hasAll([req.fromUid, req.toUid]);
+    }
+
+    function gameField(data) {
+      return data.get('game', {});
+    }
+
+    function currentPlayerId(data) {
+      let game = gameField(data);
+      let players = game.get('players', []);
+      let idx = game.get('currentPlayerIndex', 0);
+      return players.size() > idx && idx >= 0
+        ? players[idx].get('id', '')
+        : '';
+    }
+
+    function unchangedRoomMeta() {
+      return request.resource.data.get('code', '') == resource.data.get('code', '')
+        && request.resource.data.get('maxPlayers', 0) == resource.data.get('maxPlayers', 0);
+    }
+
+    function hostStillInRoom(data) {
+      return data.get('hostId', '') in playerIds(data);
+    }
+
+    function actingHostId(data) {
+      let host = data.get('hostId', '');
+      let ids = playerIds(data);
+      return hostStillInRoom(data)
+        ? host
+        : (ids.size() > 0 ? ids[0] : host);
+    }
+
+    function isActingHost(data) {
+      return request.auth.uid == actingHostId(data);
+    }
+
+    function validHostHandoffOnRemoval() {
+      let oldHost = resource.data.get('hostId', '');
+      let newHost = request.resource.data.get('hostId', '');
+      let newIds = playerIds(request.resource.data);
+      return newHost != oldHost
+        && !(oldHost in newIds)
+        && newHost in newIds;
+    }
+
+    function validHostRepair() {
+      let affected = request.resource.data.diff(resource.data).affectedKeys();
+      return isMember(resource.data)
+        && playerIds(resource.data) == playerIds(request.resource.data)
+        && resource.data.get('players', []) == request.resource.data.get('players', [])
+        && validHostHandoffOnRemoval()
+        && affected.hasOnly(['hostId', 'code', 'maxPlayers'])
+        && unchangedRoomMeta();
+    }
+
+    function validWaitingLobbyUpdate() {
+      return isMember(resource.data)
+        && isWaiting(resource.data)
+        && isWaiting(request.resource.data)
+        && playerIds(resource.data) == playerIds(request.resource.data)
+        && unchangedRoomMeta()
+        && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['players', 'playerIds', 'hostId', 'status', 'game', 'code', 'maxPlayers']);
+    }
+
+    function validHostStart() {
+      return isMember(resource.data)
+        && resource.data.get('status', '') == 'waiting'
+        && request.resource.data.get('status', '') == 'playing'
+        && request.auth.uid == actingHostId(resource.data)
+        && request.resource.data.get('game', null) != null
+        && gameField(request.resource.data).get('players', []).size() >= 2
+        && unchangedRoomMeta();
+    }
+
+    function validLeaveUpdate() {
+      let oldIds = playerIds(resource.data);
+      let newIds = playerIds(request.resource.data);
+      let affected = request.resource.data.diff(resource.data).affectedKeys();
+      return isMember(resource.data)
+        && newIds.size() == oldIds.size() - 1
+        && request.auth.uid in oldIds
+        && !(request.auth.uid in newIds)
+        && unchangedRoomMeta()
+        && (
+          request.resource.data.get('hostId', '') == resource.data.get('hostId', '')
+          || validHostHandoffOnRemoval()
+        )
+        && (
+            !affected.hasAny(['game'])
+            || gameField(request.resource.data).get('players', []).size()
+               == gameField(resource.data).get('players', []).size() - 1
+        );
+    }
+
+    function canMutateGame() {
+      let uid = request.auth.uid;
+      let current = currentPlayerId(resource.data);
+      let catchable = gameField(resource.data).get('catchableUnoPlayerId', '');
+      return uid == current || (catchable != '' && catchable != uid);
+    }
+
+    function validPlayingGameMutation() {
+      let affected = request.resource.data.diff(resource.data).affectedKeys();
+      return isMember(resource.data)
+        && resource.data.get('status', '') in ['playing', 'finished']
+        && playerIds(resource.data) == playerIds(request.resource.data)
+        && request.resource.data.get('hostId', '') == resource.data.get('hostId', '')
+        && affected.hasOnly(['game', 'status', 'turnStartedAt'])
+        && affected.hasAny(['game'])
+        && canMutateGame()
+        && unchangedRoomMeta();
+    }
+
+    function turnExpired(data) {
+      let ts = data.get('turnStartedAt', null);
+      return ts != null && request.time > ts + duration.value(60, 's');
+    }
+
+    function validHostKick() {
+      let oldIds = playerIds(resource.data);
+      let newIds = playerIds(request.resource.data);
+      let affected = request.resource.data.diff(resource.data).affectedKeys();
+      let oldGamePlayers = gameField(resource.data).get('players', []);
+      let newGamePlayers = gameField(request.resource.data).get('players', []);
+      return isMember(resource.data)
+        && request.auth.uid == actingHostId(resource.data)
+        && request.auth.uid in newIds
+        && newIds.size() == oldIds.size() - 1
+        && unchangedRoomMeta()
+        && affected.hasOnly([
+          'players', 'playerIds', 'game', 'status', 'turnStartedAt',
+          'hostId', 'code', 'maxPlayers'
+        ])
+        && (
+          !affected.hasAny(['game'])
+          || newGamePlayers.size() < oldGamePlayers.size()
+          || request.resource.data.get('status', '') == 'finished'
+        );
+    }
+
+    function validTimeoutMutation() {
+      let oldIds = playerIds(resource.data);
+      let newIds = playerIds(request.resource.data);
+      let affected = request.resource.data.diff(resource.data).affectedKeys();
+      let removedOne = newIds.size() == oldIds.size() - 1;
+      return isMember(resource.data)
+        && resource.data.get('status', '') == 'playing'
+        && (turnExpired(resource.data) || removedOne)
+        && unchangedRoomMeta()
+        && affected.hasOnly(['game', 'status', 'turnStartedAt', 'players', 'playerIds', 'hostId'])
+        && (newIds == oldIds || removedOne)
+        && (
+          request.resource.data.get('hostId', '') == resource.data.get('hostId', '')
+          || validHostHandoffOnRemoval()
+        );
+    }
+
+    function validHostReplay() {
+      return isMember(resource.data)
+        && request.auth.uid == actingHostId(resource.data)
+        && resource.data.get('status', '') == 'finished'
+        && request.resource.data.get('status', '') == 'playing'
+        && request.resource.data.get('game', null) != null
+        && unchangedRoomMeta();
+    }
+
+    function validRoomUpdate() {
+      return isValidJoin()
+        || validWaitingLobbyUpdate()
+        || validHostStart()
+        || validLeaveUpdate()
+        || validPlayingGameMutation()
+        || validHostKick()
+        || validTimeoutMutation()
+        || validHostReplay()
+        || validHostRepair();
     }
 
     match /users/{userId} {
@@ -139,7 +329,7 @@ service cloud.firestore {
         && validUserCreate();
       allow update: if isSignedIn()
         && request.auth.uid == userId
-        && validProgressDelta();
+        && validUserUpdate();
 
       match /room_invites/{inviteId} {
         allow read, delete: if isSignedIn() && request.auth.uid == userId;
@@ -192,12 +382,9 @@ service cloud.firestore {
     }
 
     match /rooms/{roomId} {
-      allow read: if isSignedIn()
-        && (
-          !exists(/databases/$(database)/documents/rooms/$(roomId))
-          || isMember(resource.data)
-          || isWaiting(resource.data)
-        );
+      // Cho phép đọc phòng theo mã để vào phòng (kể cả đang chơi → báo lỗi rõ trong app).
+      allow get: if isSignedIn();
+      allow list: if false;
 
       allow create: if isSignedIn()
         && request.resource.data.hostId == request.auth.uid
@@ -206,8 +393,7 @@ service cloud.firestore {
         && request.resource.data.players.size() == 1
         && isWaiting(request.resource.data);
 
-      allow update: if isSignedIn()
-        && (isMember(resource.data) || isValidJoin());
+      allow update: if isSignedIn() && validRoomUpdate();
 
       allow delete: if isMember(resource.data);
     }

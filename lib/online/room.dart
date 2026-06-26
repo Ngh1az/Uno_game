@@ -1,3 +1,5 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 import '../game/game_limits.dart';
 import '../models/game_state.dart';
 
@@ -45,6 +47,9 @@ class Room {
   /// Trạng thái ván chơi (null khi còn ở sảnh chờ).
   final GameState? game;
 
+  /// Thời điểm bắt đầu lượt hiện tại (server) — dùng cho timeout.
+  final DateTime? turnStartedAt;
+
   const Room({
     required this.code,
     required this.hostId,
@@ -52,6 +57,7 @@ class Room {
     required this.players,
     required this.maxPlayers,
     this.game,
+    this.turnStartedAt,
   });
 
   bool get isFull => players.length >= maxPlayers;
@@ -63,7 +69,7 @@ class Room {
     'players': players.map((p) => p.toJson()).toList(),
     'playerIds': players.map((p) => p.id).toList(),
     'maxPlayers': maxPlayers,
-    'game': game?.toJson(),
+    if (game != null) 'game': game!.toJson(),
   };
 
   factory Room.fromJson(Map<String, dynamic> json) => Room(
@@ -77,5 +83,11 @@ class Room {
     game: json['game'] == null
         ? null
         : GameState.fromJson(Map<String, dynamic>.from(json['game'] as Map)),
+    turnStartedAt: _parseTurnStartedAt(json['turnStartedAt']),
   );
+
+  static DateTime? _parseTurnStartedAt(Object? value) {
+    if (value is Timestamp) return value.toDate();
+    return null;
+  }
 }

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
 import '../online/auth_service.dart';
+import '../widgets/background_image.dart';
 import '../widgets/google_sign_in_button.dart';
 import '../widgets/settings_sheet.dart';
 import '../widgets/uno_circle_button.dart';
@@ -64,8 +65,8 @@ class _LoginScreenState extends State<LoginScreen> {
         fit: StackFit.expand,
         children: [
           const ColoredBox(color: Color(0xFF2A0707)),
-          Image.asset(
-            'assets/images/background/loginscreen2.png',
+          const BackgroundImage(
+            assetPath: 'assets/images/background/loginscreen2.png',
             fit: BoxFit.cover,
             alignment: Alignment.topCenter,
           ),

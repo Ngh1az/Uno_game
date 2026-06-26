@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../daily_quests/daily_quest_store.dart';
 import '../titles/title_definition.dart';
 import '../titles/title_store.dart';
+import '../widgets/background_image.dart';
 import '../widgets/title_action_snack.dart';
 import '../widgets/title_name_text.dart';
 import '../widgets/title_tier_theme.dart';
@@ -102,11 +103,11 @@ class _TitlesScreenState extends State<TitlesScreen>
         fit: StackFit.expand,
         children: [
           const ColoredBox(color: Color(0xFF2A0707)),
-          Image.asset(
-            'assets/images/background/homescreen.png',
+          const BackgroundImage(
+            assetPath: 'assets/images/background/homescreen.png',
             fit: BoxFit.cover,
-            alignment: const Alignment(0, -0.12),
-            color: const Color(0xAAFFFFFF),
+            alignment: Alignment(0, -0.12),
+            color: Color(0xAAFFFFFF),
             colorBlendMode: BlendMode.modulate,
           ),
           const DecoratedBox(
@@ -397,7 +398,7 @@ class _TitlesScreenState extends State<TitlesScreen>
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
         itemCount: filters.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
         itemBuilder: (context, i) {
           final f = filters[i];
           final selected = _filter == f;
@@ -504,7 +505,7 @@ class _TitlesScreenState extends State<TitlesScreen>
     return ListView.separated(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
       itemCount: items.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 10),
+      separatorBuilder: (_, _) => const SizedBox(height: 10),
       itemBuilder: (context, i) => _titleTile(context, items[i]),
     );
   }
@@ -854,9 +855,9 @@ class _TitlesScreenState extends State<TitlesScreen>
 }
 
 class _NewDot extends StatelessWidget {
-  const _NewDot({this.size = 8});
+  const _NewDot();
 
-  final double size;
+  static const double size = 8;
 
   @override
   Widget build(BuildContext context) {

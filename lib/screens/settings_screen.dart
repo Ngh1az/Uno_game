@@ -93,7 +93,6 @@ class SettingsScreen extends StatelessWidget {
                             title: 'Bật thông báo',
                             value: s.notificationsEnabled,
                             onChanged: s.setNotificationsEnabled,
-                            comingSoon: true,
                           ),
                           _switchTile(
                             context,
@@ -102,7 +101,6 @@ class SettingsScreen extends StatelessWidget {
                             value: s.roomInviteNotifications,
                             enabled: s.notificationsEnabled,
                             onChanged: s.setRoomInviteNotifications,
-                            comingSoon: true,
                           ),
                           _switchTile(
                             context,
@@ -111,7 +109,6 @@ class SettingsScreen extends StatelessWidget {
                             value: s.turnNotifications,
                             enabled: s.notificationsEnabled,
                             onChanged: s.setTurnNotifications,
-                            comingSoon: true,
                           ),
                         ],
                       ),

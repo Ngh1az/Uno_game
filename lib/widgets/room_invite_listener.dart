@@ -1,5 +1,12 @@
+import 'dart:async';
+
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../app_settings.dart';
+import '../notifications/in_app_notifications.dart';
+import '../friends/active_room_tracker.dart';
 import '../friends/friend_models.dart';
 import '../friends/friends_service.dart';
 import '../navigation/app_navigator.dart';
@@ -35,22 +42,50 @@ class _RoomInviteListenerState extends State<RoomInviteListener> {
   final _shown = <String>{};
   bool _joining = false;
   bool _dialogOpen = false;
+  int _showRetries = 0;
+  List<RoomInvite> _pendingInvites = const [];
+  late final StreamSubscription<User?> _authSub;
+
+  static const _maxShowRetries = 40;
 
   GlobalKey<NavigatorState> get _navKey => widget.navigatorKey ?? rootNavigatorKey;
 
   @override
+  void initState() {
+    super.initState();
+    _authSub = FirebaseAuth.instance.authStateChanges().listen((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _authSub.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final user = AuthService().currentUser;
-    if (user == null || AuthService().isGuest) return widget.child;
+    if (user == null) return widget.child;
 
-    return StreamBuilder<List<RoomInvite>>(
-      stream: _service.watchRoomInvites(),
-      builder: (context, snap) {
-        final invites = snap.data ?? [];
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _maybeShowInvite(invites);
-        });
-        return widget.child;
+    return ListenableBuilder(
+      listenable: AppSettings.instance,
+      builder: (context, _) {
+        return StreamBuilder<List<RoomInvite>>(
+          stream: _service.watchRoomInvites(),
+          builder: (context, snap) {
+            if (snap.hasError && kDebugMode) {
+              debugPrint('watchRoomInvites error: ${snap.error}');
+            }
+            final invites = snap.data ?? [];
+            _pendingInvites = invites;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              unawaited(_maybeShowInvite());
+            });
+            return widget.child;
+          },
+        );
       },
     );
   }
@@ -61,22 +96,47 @@ class _RoomInviteListenerState extends State<RoomInviteListener> {
     return null;
   }
 
-  void _maybeShowInvite(List<RoomInvite> invites) {
+  Future<void> _maybeShowInvite() async {
     if (!mounted || _joining || _dialogOpen) return;
+    if (!InAppNotifications.roomInvites) return;
 
-    final fresh = invites
+    final myUid = AuthService().currentUser?.uid ?? '';
+    if (myUid.isNotEmpty && await _service.isUserInActiveGame(myUid)) {
+      await ActiveRoomTracker.instance.clear(myUid);
+      if (!mounted) return;
+      if (await _service.isUserInActiveGame(myUid)) return;
+    }
+    if (!mounted) return;
+
+    final fresh = _pendingInvites
         .where((i) => !_shown.contains(i.id) && !i.isExpired)
         .toList();
-    if (fresh.isEmpty) return;
+    if (fresh.isEmpty) {
+      _showRetries = 0;
+      return;
+    }
 
     final dialogContext = _dialogContext;
-    if (dialogContext == null) return;
+    if (dialogContext == null) {
+      if (_showRetries < _maxShowRetries) {
+        _showRetries++;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) unawaited(_maybeShowInvite());
+        });
+      }
+      return;
+    }
+    _showRetries = 0;
 
     final invite = fresh.first;
+    if (_shown.contains(invite.id)) return;
     _shown.add(invite.id);
     _dialogOpen = true;
 
+    // dialogContext lấy từ _dialogContext (đã kiểm tra ctx.mounted) và dùng
+    // ngay sau đó, không có async gap → an toàn.
     showDialog<void>(
+      // ignore: use_build_context_synchronously
       context: dialogContext,
       useRootNavigator: true,
       barrierDismissible: false,
@@ -93,13 +153,33 @@ class _RoomInviteListenerState extends State<RoomInviteListener> {
         },
       ),
     ).whenComplete(() {
-      if (mounted) _dialogOpen = false;
+      if (mounted) {
+        _dialogOpen = false;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) unawaited(_maybeShowInvite());
+        });
+      }
     });
   }
 
   Future<void> _acceptInvite(RoomInvite invite) async {
     setState(() => _joining = true);
     try {
+      final myUid = AuthService().currentUser?.uid ?? '';
+      if (myUid.isNotEmpty && await _service.isUserInActiveGame(myUid)) {
+        final navContext = _dialogContext;
+        if (navContext != null && navContext.mounted) {
+          AppSnack.error(
+            navContext,
+            'Bạn đang chơi. Tham gia phòng khác sau khi ván kết thúc.',
+          );
+        }
+        return;
+      }
+
+      try {
+        await WaitingRoomSession.instance.leave();
+      } catch (_) {}
       await _roomService.joinRoom(
         code: invite.roomCode,
         name: AuthService().displayName,
@@ -121,6 +201,12 @@ class _RoomInviteListenerState extends State<RoomInviteListener> {
       final navContext = _dialogContext;
       if (navContext != null && navContext.mounted) {
         AppSnack.error(navContext, e.message);
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('acceptInvite error: $e');
+      final navContext = _dialogContext;
+      if (navContext != null && navContext.mounted) {
+        AppSnack.error(navContext, 'Không vào được phòng. Thử lại.');
       }
     } finally {
       if (mounted) setState(() => _joining = false);

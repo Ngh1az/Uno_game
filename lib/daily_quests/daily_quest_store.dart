@@ -214,6 +214,94 @@ class DailyQuestStore extends ChangeNotifier {
     }
   }
 
+  /// Áp số xu đã reconcile từ cloud vào cache local — KHÔNG đẩy ngược cloud.
+  Future<void> applyCloudCoins(int value) async {
+    if (!_loaded) return;
+    if (coins == value) return;
+    coins = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_k(_uid, 'coins'), value);
+    notifyListeners();
+  }
+
+  /// Snapshot nhiệm vụ ngày/tuần để đẩy lên cloud.
+  Map<String, dynamic> questCloudPayload() => {
+        'dailyDate': _today,
+        'daily': {for (final q in dailyQuests) q.id: q.toJson()},
+        'weeklyWeek': _weekKey,
+        'weekly': {for (final q in weeklyQuests) q.id: q.toJson()},
+        'weeklyLoginDays': _weeklyLoginDays,
+      };
+
+  /// Gộp nhiệm vụ từ cloud vào local một cách an toàn:
+  /// - progress lấy max(local, cloud) → không tụt tiến độ
+  /// - claimed = local || cloud → chống nhận thưởng 2 lần (double-claim)
+  /// Chỉ áp khi cùng ngày/tuần. Không đẩy ngược cloud.
+  Future<void> mergeCloudQuests(Map<String, dynamic> cloud) async {
+    if (!_loaded) return;
+    var changed = false;
+
+    if (cloud['dailyDate'] == _today && cloud['daily'] is Map) {
+      final saved = Map<String, dynamic>.from(cloud['daily'] as Map);
+      changed = _mergeQuestList(dailyQuests, saved) || changed;
+    }
+
+    if (cloud['weeklyWeek'] == _weekKey) {
+      if (cloud['weekly'] is Map) {
+        final saved = Map<String, dynamic>.from(cloud['weekly'] as Map);
+        changed = _mergeQuestList(weeklyQuests, saved) || changed;
+      }
+      final cloudLoginDays = cloud['weeklyLoginDays'];
+      if (cloudLoginDays is List) {
+        final merged = {..._weeklyLoginDays, ...cloudLoginDays.whereType<String>()};
+        if (merged.length != _weeklyLoginDays.length) {
+          _weeklyLoginDays = merged.toList()..sort();
+          final quest = weeklyQuests.firstWhere((q) => q.id == 'login_days');
+          quest.progress = _weeklyLoginDays.length.clamp(0, quest.target);
+          changed = true;
+        }
+      }
+    }
+
+    if (!changed) return;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_k(_uid, 'daily_date'), _today);
+    await prefs.setString(
+      _k(_uid, 'daily_data'),
+      jsonEncode({for (final q in dailyQuests) q.id: q.toJson()}),
+    );
+    await prefs.setString(_k(_uid, 'weekly_week'), _weekKey);
+    await prefs.setString(
+      _k(_uid, 'weekly_data'),
+      jsonEncode({for (final q in weeklyQuests) q.id: q.toJson()}),
+    );
+    await prefs.setString(
+      _k(_uid, 'weekly_login_days'),
+      jsonEncode(_weeklyLoginDays),
+    );
+  }
+
+  bool _mergeQuestList(List<DailyQuest> quests, Map<String, dynamic> saved) {
+    var changed = false;
+    for (final q in quests) {
+      final raw = saved[q.id];
+      if (raw is! Map) continue;
+      final cloudProgress = raw['progress'] as int? ?? 0;
+      final cloudClaimed = raw['claimed'] as bool? ?? false;
+      final mergedProgress =
+          (cloudProgress > q.progress ? cloudProgress : q.progress)
+              .clamp(0, q.target);
+      final mergedClaimed = q.claimed || cloudClaimed;
+      if (mergedProgress != q.progress || mergedClaimed != q.claimed) {
+        q.progress = mergedProgress;
+        q.claimed = mergedClaimed;
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
   /// Chuyển dữ liệu cũ (chung máy) sang uid đang đăng nhập — một lần.
   Future<void> _migrateLegacyForUid(
     SharedPreferences prefs,
@@ -266,6 +354,9 @@ class DailyQuestStore extends ChangeNotifier {
     final data = {for (final q in dailyQuests) q.id: q.toJson()};
     await prefs.setString(_k(_uid, 'daily_data'), jsonEncode(data));
     await persistCoins();
+    if (UserSession.syncsToCloud) {
+      await CloudProgressService.instance.pushQuests(_uid);
+    }
   }
 
   Future<void> _saveWeekly() async {
@@ -279,6 +370,9 @@ class DailyQuestStore extends ChangeNotifier {
       jsonEncode(_weeklyLoginDays),
     );
     await persistCoins();
+    if (UserSession.syncsToCloud) {
+      await CloudProgressService.instance.pushQuests(_uid);
+    }
   }
 
   void _bumpDaily(String id, {int amount = 1}) {
@@ -328,6 +422,10 @@ class DailyQuestStore extends ChangeNotifier {
 
   void markOnlineJoin() {
     _bumpDaily('online_join');
+  }
+
+  void markOnlinePlay() {
+    _bumpWeekly('play_games');
     _bumpWeekly('online_games');
   }
 

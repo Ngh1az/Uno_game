@@ -2,12 +2,14 @@ import 'package:flutter/material.dart';
 
 import '../app_settings.dart';
 import '../online/auth_service.dart';
+import '../widgets/app_snack.dart';
 import '../daily_quests/daily_quest_store.dart';
 import '../titles/title_store.dart';
 import '../widgets/home_quest_hub.dart';
 import '../widgets/home_title_card.dart';
 import '../user/user_session.dart';
 import '../friends/presence_service.dart';
+import '../widgets/background_image.dart';
 import '../widgets/google_account_gate.dart';
 import '../widgets/sign_out_dialog.dart';
 import '../widgets/user_avatar.dart';
@@ -48,12 +50,25 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _bootstrap() async {
+    final user = AuthService().currentUser;
+    // Đảm bảo profile Google (photoURL) đã populated trước khi render.
+    try {
+      await user?.reload();
+    } catch (_) {}
     await UserSession.activate(AuthService().currentUser);
     final uid = AuthService().currentUser?.uid;
     if (uid != null && uid.isNotEmpty && !AuthService().isGuest) {
       await _presence.start(uid);
     }
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    setState(() {});
+    if (UserSession.lastCloudSyncFailed) {
+      AppSnack.warning(
+        context,
+        'Chưa đồng bộ được tiến độ lên đám mây — kiểm tra kết nối mạng.',
+        duration: const Duration(milliseconds: 2600),
+      );
+    }
   }
 
   void _openTitles(BuildContext context) {
@@ -75,10 +90,10 @@ class _HomeScreenState extends State<HomeScreen> {
         fit: StackFit.expand,
         children: [
           const ColoredBox(color: Color(0xFF2A0707)),
-          Image.asset(
-            'assets/images/background/homescreen.png',
+          const BackgroundImage(
+            assetPath: 'assets/images/background/homescreen.png',
             fit: BoxFit.cover,
-            alignment: const Alignment(0, -0.12),
+            alignment: Alignment(0, -0.12),
           ),
           const DecoratedBox(
             decoration: BoxDecoration(
@@ -185,65 +200,75 @@ class _HomeScreenState extends State<HomeScreen> {
     required int coins,
     required int claimable,
   }) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 12, 0),
-      child: Row(
-        children: [
-          UserAvatar(
-            photoUrl: photoUrl,
-            displayName: name,
-            radius: 20,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Row(
-              children: [
-                Flexible(
-                  child: Text(
-                    name,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      shadows: [
-                        Shadow(color: Colors.black54, blurRadius: 4),
-                      ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 360;
+        final avatarRadius = compact ? 16.0 : 20.0;
+        final actionSize = compact ? 34.0 : 40.0;
+
+        return Padding(
+          padding: EdgeInsets.fromLTRB(compact ? 10 : 16, 8, compact ? 8 : 12, 0),
+          child: Row(
+            children: [
+              UserAvatar(
+                photoUrl: photoUrl,
+                displayName: name,
+                radius: avatarRadius,
+              ),
+              SizedBox(width: compact ? 6 : 10),
+              Expanded(
+                child: Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        name,
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: compact ? 13 : 15,
+                          fontWeight: FontWeight.w600,
+                          shadows: const [
+                            Shadow(color: Colors.black54, blurRadius: 4),
+                          ],
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                    if (!compact) ...[
+                      const SizedBox(width: 8),
+                      _coinsChip(coins, claimable),
+                    ],
+                  ],
                 ),
-                const SizedBox(width: 8),
-                _coinsChip(coins, claimable),
-              ],
-            ),
+              ),
+              SizedBox(width: compact ? 4 : 6),
+              UnoCircleButton(
+                icon: Icons.settings,
+                label: '',
+                showLabel: false,
+                size: actionSize,
+                iconScale: 0.5,
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                  );
+                },
+              ),
+              SizedBox(width: compact ? 2 : 4),
+              UnoCircleButton(
+                icon: Icons.logout,
+                label: '',
+                showLabel: false,
+                size: actionSize,
+                iconScale: 0.5,
+                onTap: () async {
+                  if (!await confirmSignOut(context)) return;
+                  await auth.signOut();
+                },
+              ),
+            ],
           ),
-          const SizedBox(width: 6),
-          UnoCircleButton(
-            icon: Icons.settings,
-            label: '',
-            showLabel: false,
-            size: 40,
-            iconScale: 0.5,
-            onTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const SettingsScreen()),
-              );
-            },
-          ),
-          const SizedBox(width: 4),
-          UnoCircleButton(
-            icon: Icons.logout,
-            label: '',
-            showLabel: false,
-            size: 40,
-            iconScale: 0.5,
-            onTap: () async {
-              if (!await confirmSignOut(context)) return;
-              await auth.signOut();
-            },
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 

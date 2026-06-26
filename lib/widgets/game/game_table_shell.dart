@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../background_image.dart';
 import 'game_table_ring_painter.dart';
 
 /// Nền premium đỏ–vàng đồng bộ Home/Titles.
@@ -15,11 +16,11 @@ class GameTableShell extends StatelessWidget {
       fit: StackFit.expand,
       children: [
         const ColoredBox(color: Color(0xFF2A0707)),
-        Image.asset(
-          'assets/images/background/homescreen.png',
+        const BackgroundImage(
+          assetPath: 'assets/images/background/homescreen.png',
           fit: BoxFit.cover,
-          alignment: const Alignment(0, -0.12),
-          color: const Color(0xAAFFFFFF),
+          alignment: Alignment(0, -0.12),
+          color: Color(0xAAFFFFFF),
           colorBlendMode: BlendMode.modulate,
         ),
         const DecoratedBox(

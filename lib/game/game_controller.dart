@@ -99,14 +99,13 @@ class GameController extends ChangeNotifier {
   /// Người chơi đánh một lá. Với lá Wild cần truyền [chosenColor].
   void playHuman(UnoCard card, {CardColor? chosenColor, int? handIndex}) {
     if (!isHumanTurn || _botThinking) return;
-    final declaredUno = state.hasDeclaredUno(humanId) ||
-        (AppSettings.instance.autoUnoCall && human.hand.length == 2);
     state.playCard(
       humanId,
       card,
       chosenColor: chosenColor,
       handIndex: handIndex,
-      declaredUno: declaredUno,
+      declaredUno: state.hasDeclaredUno(humanId),
+      autoUno: AppSettings.instance.autoUnoCall,
     );
     notifyListeners();
     _runBotsIfNeeded();

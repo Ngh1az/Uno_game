@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../notifications/in_app_notifications.dart';
 import '../app_settings.dart';
 import '../daily_quests/daily_quest_store.dart';
 import '../titles/title_store.dart';
@@ -35,15 +36,15 @@ class GameScreen extends StatefulWidget {
   State<GameScreen> createState() => _GameScreenState();
 }
 
-class _GameScreenState extends State<GameScreen> {
+class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   static const _compactBotThreshold = 4;
 
   late final GameController _controller;
   final _eventFeedback = GameEventFeedback();
   final _discardKey = GlobalKey();
   final _drawKey = GlobalKey();
+  final _introHandKey = GlobalKey();
   final _handKey = GlobalKey();
-  final _flyAnchorKey = GlobalKey();
   final _motionKey = GlobalKey<GameCardMotionLayerState>();
   final _drawFlyKey = GlobalKey();
   final _intro = GameMatchIntroController();
@@ -53,10 +54,10 @@ class _GameScreenState extends State<GameScreen> {
   bool _suppressPlayAnim = false;
   bool _suppressDrawAnim = false;
   bool _introSeqRunning = false;
-  UnoCard? _animatingCard;
-  int? _flyingHandIndex;
-  List<UnoCard>? _frozenHand;
-  UnoCard? _selectedCard;
+  int? _selectedHandIndex;
+  bool _wasHumanTurn = false;
+  bool _away = false;
+  int _handResetToken = 0;
 
   GameCardMotionLayerState? get _motion => _motionKey.currentState;
   bool get _introBlocksPlay => _intro.blocksInteraction;
@@ -64,27 +65,48 @@ class _GameScreenState extends State<GameScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _controller = GameController();
     _controller.addListener(_onChange);
     _intro.addListener(_onIntroChange);
     _eventFeedback.reset();
     _controller.startGame(botCount: widget.botCount, runBots: false);
+    final game = _controller.state;
+    final fp = GameMatchIntroController.fingerprint(game);
+    _intro.begin(fp, game.players.map((p) => p.id).toList());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      unawaited(_startMatchIntro(_controller.state));
+      unawaited(_startMatchIntro(game, fp));
     });
   }
 
   void _onIntroChange() {
+    if (_intro.isDone) {
+      _resetHandUiState();
+      _handResetToken++;
+    }
     if (mounted) setState(() {});
   }
 
-  Future<void> _startMatchIntro(GameState game) async {
-    final fp = GameMatchIntroController.fingerprint(game);
-    if (_intro.hasCompleted(fp) || _intro.isActive || _introSeqRunning) return;
+  void _resetHandUiState() {
+    _selectedHandIndex = null;
+    _suppressPlayAnim = false;
+    _suppressDrawAnim = false;
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _away = state != AppLifecycleState.resumed;
+  }
+
+  Future<void> _startMatchIntro(GameState game, String fp) async {
+    if (_intro.hasCompleted(fp) || _introSeqRunning) return;
 
     _introSeqRunning = true;
-    _intro.begin(fp, game.players.map((p) => p.id).toList());
+    _resetHandUiState();
+    if (!_intro.isActive || _intro.activeFingerprint != fp) {
+      _intro.begin(fp, game.players.map((p) => p.id).toList());
+    }
     _snapshotHands(game);
 
     try {
@@ -103,7 +125,7 @@ class _GameScreenState extends State<GameScreen> {
           game: game,
           myUid: GameController.humanId,
           drawKey: _drawFlyKey,
-          handKey: _handKey,
+          handKey: _introHandKey,
           opponentKeys: const {},
           pileWidth: pileW,
           viewportWidth: MediaQuery.sizeOf(context).width,
@@ -119,6 +141,7 @@ class _GameScreenState extends State<GameScreen> {
 
       if (!mounted) return;
       if (!_intro.isDone) _intro.markDone();
+      _resetHandUiState();
       _controller.resumeBots();
     } finally {
       _introSeqRunning = false;
@@ -145,13 +168,27 @@ class _GameScreenState extends State<GameScreen> {
       });
     }
     if (!_controller.isHumanTurn) {
-      _selectedCard = null;
+      _selectedHandIndex = null;
+      _wasHumanTurn = false;
+    } else if (_intro.isDone && !_introBlocksPlay) {
+      final away = _away || InAppNotifications.appInBackground;
+      if (away && !_wasHumanTurn) {
+        final state = _controller.state;
+        final turnKey =
+            'offline-${state.log.length}-${state.currentPlayer.id}';
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          InAppNotifications.notifyMyTurn(context, turnKey: turnKey);
+        });
+      }
+      _wasHumanTurn = true;
     }
     setState(() {});
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _controller.removeListener(_onChange);
     _intro.removeListener(_onIntroChange);
     _controller.dispose();
@@ -268,13 +305,14 @@ class _GameScreenState extends State<GameScreen> {
       return;
     }
 
+    final screenSize = MediaQuery.sizeOf(context);
     await WidgetsBinding.instance.endOfFrame;
     final from = GameCardMotionLayerState.centerOf(_drawKey);
     final to = GameCardMotionLayerState.centerOf(
       _handKey,
       fallback: Offset(
-        MediaQuery.sizeOf(context).width / 2,
-        MediaQuery.sizeOf(context).height - 120,
+        screenSize.width / 2,
+        screenSize.height - 120,
       ),
     );
 
@@ -283,7 +321,7 @@ class _GameScreenState extends State<GameScreen> {
       card: _controller.state.topCard,
       from: from,
       to: to,
-      width: GameTheme.pileWidthFor(MediaQuery.sizeOf(context).width),
+      width: GameTheme.pileWidthFor(screenSize.width),
       faceDown: true,
       duration: const Duration(milliseconds: 400),
     );
@@ -291,29 +329,28 @@ class _GameScreenState extends State<GameScreen> {
     _controller.drawHuman();
   }
 
-  Future<void> _playCardAnimated(UnoCard card, {CardColor? chosenColor}) async {
+  Future<void> _playCardAnimated(
+    UnoCard card, {
+    CardColor? chosenColor,
+    Offset? fromGlobal,
+  }) async {
     if (_introBlocksPlay) return;
-    final hand = _frozenHand ?? _controller.human.hand;
-    final index = hand.indexWhere((c) => identical(c, card));
+    final index = _controller.human.hand.indexWhere((c) => c == card);
     if (index < 0) return;
 
-    _frozenHand = List<UnoCard>.from(_controller.human.hand);
-    _flyingHandIndex = index;
+    _selectedHandIndex = null;
 
     final layout = GameHandLayout.compute(
       viewportWidth: MediaQuery.sizeOf(context).width,
-      cardCount: _frozenHand!.length,
+      cardCount: _controller.human.hand.length,
     );
     final motion = _useCardMotion ? _motion : null;
+    final from = fromGlobal ?? GameCardMotionLayerState.centerOf(_handKey);
 
     try {
       if (motion != null) {
-        setState(() => _animatingCard = card);
-        await WidgetsBinding.instance.endOfFrame;
-
-        final from = GameCardMotionLayerState.centerOf(_flyAnchorKey);
-        final to = GameCardMotionLayerState.centerOf(_discardKey);
         _suppressPlayAnim = true;
+        final to = GameCardMotionLayerState.centerOf(_discardKey);
         await motion.fly(
           card: card,
           from: from,
@@ -326,36 +363,35 @@ class _GameScreenState extends State<GameScreen> {
       }
 
       _controller.playHuman(card, chosenColor: chosenColor, handIndex: index);
-      if (mounted) setState(() => _selectedCard = null);
+      if (mounted) setState(() => _selectedHandIndex = null);
     } finally {
-      if (mounted) {
-        setState(() {
-          _animatingCard = null;
-          _flyingHandIndex = null;
-          _frozenHand = null;
-        });
-      }
+      _selectedHandIndex = null;
     }
   }
 
-  void _selectCard(UnoCard card) {
+  void _selectCard(int handIndex) {
+    final hand = _controller.human.hand;
+    if (handIndex < 0 || handIndex >= hand.length) return;
+    final card = hand[handIndex];
     if (!_controller.canPlay(card)) {
       AppSnack.warning(context, 'Không thể chọn lá này',
           duration: const Duration(milliseconds: 900));
       return;
     }
-    setState(() => _selectedCard = card);
+    setState(() => _selectedHandIndex = handIndex);
   }
 
-  Future<void> _playSelected() async {
-    final card = _selectedCard;
-    if (card == null) {
+  Future<void> _playSelected({Offset? fromGlobal}) async {
+    final hand = _controller.human.hand;
+    final handIndex = _selectedHandIndex;
+    if (handIndex == null || handIndex < 0 || handIndex >= hand.length) {
       AppSnack.warning(context, 'Chọn lá bài trước',
           duration: const Duration(milliseconds: 900));
       return;
     }
+    final card = hand[handIndex];
     if (!_controller.canPlay(card)) {
-      setState(() => _selectedCard = null);
+      setState(() => _selectedHandIndex = null);
       return;
     }
     CardColor? chosen;
@@ -363,7 +399,7 @@ class _GameScreenState extends State<GameScreen> {
       chosen = await GamePremiumDialog.pickColor(context);
       if (chosen == null) return;
     }
-    await _playCardAnimated(card, chosenColor: chosen);
+    await _playCardAnimated(card, chosenColor: chosen, fromGlobal: fromGlobal);
   }
 
   void _callUno() {
@@ -399,8 +435,12 @@ class _GameScreenState extends State<GameScreen> {
         _eventFeedback.reset();
         _handCounts.clear();
         _intro.reset();
+        _resetHandUiState();
         _controller.startGame(botCount: widget.botCount, runBots: false);
-        unawaited(_startMatchIntro(_controller.state));
+        final replayGame = _controller.state;
+        final fp = GameMatchIntroController.fingerprint(replayGame);
+        _intro.begin(fp, replayGame.players.map((p) => p.id).toList());
+        unawaited(_startMatchIntro(replayGame, fp));
       },
     );
   }
@@ -645,31 +685,41 @@ class _GameScreenState extends State<GameScreen> {
     if (_introBlocksPlay) {
       final virtualCount = _intro.virtualHandCounts[GameController.humanId] ?? 0;
       return GameIntroHandStrip(
-        handKey: _handKey,
+        handKey: _introHandKey,
         cardCount: virtualCount,
         viewportWidth: MediaQuery.sizeOf(context).width,
       );
     }
 
-    final cards = _frozenHand ?? _controller.human.hand;
     final humanTurn = _controller.isHumanTurn && !_controller.botThinking;
+    final hand = _controller.human.hand;
+    final layout = GameHandLayout.compute(
+      viewportWidth: MediaQuery.sizeOf(context).width,
+      cardCount: hand.length,
+    );
+    final handFp = _intro.activeFingerprint ??
+        GameMatchIntroController.fingerprint(state);
 
-    return GamePlayerHandStrip(
+    return SizedBox(
       key: _handKey,
-      cards: cards,
-      isMyTurn: humanTurn,
-      showHints: _showHints,
-      canPlay: _controller.canPlay,
-      flyingHandIndex: _flyingHandIndex,
-      selectedCard: _selectedCard,
-      flyAnchorKey: _flyAnchorKey,
-      onCardTap: (card, _) {
-        if (identical(_selectedCard, card)) {
-          _playSelected();
-        } else {
-          _selectCard(card);
-        }
-      },
+      height: layout.totalHeight(hand.length),
+      width: double.infinity,
+      child: GamePlayerHandStrip(
+        key: ValueKey('hand-$handFp-${hand.length}'),
+        resetToken: _handResetToken,
+        cards: hand,
+        isMyTurn: humanTurn,
+        showHints: _showHints,
+        canPlay: _controller.canPlay,
+        selectedIndex: _selectedHandIndex,
+        onCardTap: (card, index, globalCenter) {
+          if (_selectedHandIndex == index) {
+            unawaited(_playSelected(fromGlobal: globalCenter));
+          } else {
+            _selectCard(index);
+          }
+        },
+      ),
     );
   }
 }

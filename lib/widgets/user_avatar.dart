@@ -1,3 +1,5 @@
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 /// Avatar người chơi — ảnh Google nếu có, không thì chữ cái đầu.
@@ -32,17 +34,24 @@ class UserAvatar extends StatelessWidget {
         radius: radius,
         backgroundColor: _fallbackBg,
         child: ClipOval(
-          child: Image.network(
-            url,
-            width: size,
-            height: size,
-            fit: BoxFit.cover,
-            errorBuilder: (_, _, _) => _initialBadge(),
-            loadingBuilder: (context, child, progress) {
-              if (progress == null) return child;
-              return _initialBadge();
-            },
-          ),
+          child: kIsWeb
+              ? Image.network(
+                  url,
+                  width: size,
+                  height: size,
+                  fit: BoxFit.cover,
+                  cacheWidth: (size * 2).round(),
+                  errorBuilder: (_, _, _) => _initialBadge(),
+                )
+              : CachedNetworkImage(
+                  imageUrl: url,
+                  width: size,
+                  height: size,
+                  fit: BoxFit.cover,
+                  memCacheWidth: (size * 2).round(),
+                  placeholder: (_, _) => _initialBadge(),
+                  errorWidget: (_, _, _) => _initialBadge(),
+                ),
         ),
       );
     }

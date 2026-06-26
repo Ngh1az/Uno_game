@@ -3,6 +3,9 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../friends/active_room_tracker.dart';
+import '../friends/friends_service.dart';
+import '../navigation/app_navigator.dart';
+import '../notifications/in_app_notifications.dart';
 import '../game/game_limits.dart';
 import 'online_game_controller.dart';
 
@@ -17,7 +20,9 @@ class WaitingRoomSession extends ChangeNotifier {
   bool _gameStartedWhileMinimized = false;
   bool _roomClosedNotified = false;
   bool _roomClosedWhileAway = false;
+  bool _kickedWhileAway = false;
   bool _roomScreenVisible = false;
+  bool _leavingVoluntarily = false;
 
   String? get roomCode => _controller?.code;
 
@@ -44,6 +49,16 @@ class WaitingRoomSession extends ChangeNotifier {
   bool get gameStartedWhileMinimized => _gameStartedWhileMinimized;
 
   bool get roomClosedWhileAway => _roomClosedWhileAway;
+
+  bool get kickedWhileAway => _kickedWhileAway;
+
+  bool get leavingVoluntarily => _leavingVoluntarily;
+
+  void clearKickedFlag() {
+    if (!_kickedWhileAway) return;
+    _kickedWhileAway = false;
+    notifyListeners();
+  }
 
   void clearGameStartedFlag() {
     if (!_gameStartedWhileMinimized) return;
@@ -82,6 +97,7 @@ class WaitingRoomSession extends ChangeNotifier {
       _roomScreenVisible = true;
       _gameStartedWhileMinimized = false;
       _roomClosedWhileAway = false;
+      _kickedWhileAway = false;
       notifyListeners();
       return _controller!;
     }
@@ -94,8 +110,26 @@ class WaitingRoomSession extends ChangeNotifier {
     _gameStartedWhileMinimized = false;
     _roomClosedNotified = false;
     _roomClosedWhileAway = false;
+    _kickedWhileAway = false;
     notifyListeners();
     return _controller!;
+  }
+
+  /// Dọn phiên cục bộ khi đã bị đuổi khỏi phòng (không gọi leave Firestore).
+  Future<void> ejectLocal() async {
+    final c = _controller;
+    if (c == null) return;
+
+    c.removeListener(_onControllerChanged);
+    _controller = null;
+    _minimized = false;
+    _gameStartedWhileMinimized = false;
+    _roomClosedNotified = false;
+    _roomScreenVisible = false;
+    notifyListeners();
+
+    final uid = c.uid;
+    await _finalizeController(c, uid: uid, leaveFirestore: false);
   }
 
   void minimize() {
@@ -105,8 +139,29 @@ class WaitingRoomSession extends ChangeNotifier {
   }
 
   Future<void> leave() async {
-    _detachController(leaveFirestore: true);
+    final c = _controller;
+    if (c == null) return;
+
+    _leavingVoluntarily = true;
     notifyListeners();
+
+    // Dọn UI state ngay (đồng bộ) để UX responsive.
+    c.removeListener(_onControllerChanged);
+    _controller = null;
+    _minimized = false;
+    _gameStartedWhileMinimized = false;
+    _roomClosedNotified = false;
+    _roomScreenVisible = false;
+    notifyListeners();
+
+    // Await Firestore leave — đảm bảo player bị xoá khỏi phòng trước khi return.
+    final uid = c.uid;
+    try {
+      await _finalizeController(c, uid: uid, leaveFirestore: true);
+    } finally {
+      _leavingVoluntarily = false;
+      notifyListeners();
+    }
   }
 
   void _onControllerChanged() {
@@ -122,11 +177,47 @@ class WaitingRoomSession extends ChangeNotifier {
       return;
     }
 
+    if (c.room != null && !c.isMember) {
+      if (_leavingVoluntarily) return;
+      if (_roomScreenVisible && !_minimized) {
+        return;
+      }
+      final wasAway = _minimized || !_roomScreenVisible;
+      _detachController(leaveFirestore: false);
+      if (wasAway) _kickedWhileAway = true;
+      notifyListeners();
+      return;
+    }
+
     if (_minimized && c.isPlaying && !_gameStartedWhileMinimized) {
       _gameStartedWhileMinimized = true;
     }
 
+    if (_minimized && c.isPlaying && c.isMyTurn) {
+      final game = c.game;
+      final ctx = rootNavigatorKey.currentContext;
+      if (game != null && ctx != null && ctx.mounted) {
+        InAppNotifications.notifyMyTurn(
+          ctx,
+          turnKey: '${c.code}-${game.log.length}',
+          message: 'Đến lượt bạn — vào phòng!',
+        );
+      }
+    }
+
+    unawaited(_syncActiveRoomStatus(c));
+    if (c.isPlaying) {
+      unawaited(FriendsService().dismissAllRoomInvites());
+    }
+
     notifyListeners();
+  }
+
+  Future<void> _syncActiveRoomStatus(OnlineGameController c) async {
+    final uid = c.uid;
+    final room = c.room;
+    if (uid.isEmpty || room == null) return;
+    await ActiveRoomTracker.instance.updateRoomStatus(uid, room.code, room.status);
   }
 
   void _detachController({required bool leaveFirestore}) {
@@ -149,16 +240,25 @@ class WaitingRoomSession extends ChangeNotifier {
     required String uid,
     required bool leaveFirestore,
   }) async {
+    Object? lastError;
     if (leaveFirestore) {
-      try {
-        await c.leave();
-      } catch (e) {
-        if (kDebugMode) debugPrint('WaitingRoomSession.leave failed: $e');
+      for (var attempt = 0; attempt < 2; attempt++) {
+        try {
+          await c.leave();
+          lastError = null;
+          break;
+        } catch (e) {
+          lastError = e;
+          if (kDebugMode) {
+            debugPrint('WaitingRoomSession.leave failed (attempt ${attempt + 1}): $e');
+          }
+        }
       }
     }
     if (uid.isNotEmpty) {
       await ActiveRoomTracker.instance.clear(uid);
     }
     c.dispose();
+    if (lastError != null) throw lastError;
   }
 }

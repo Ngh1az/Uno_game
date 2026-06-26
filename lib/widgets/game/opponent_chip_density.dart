@@ -37,9 +37,9 @@ extension OpponentChipDensityX on OpponentChipDensity {
       };
 
   double get rowHeight => switch (this) {
-        OpponentChipDensity.roomy => 92,
-        OpponentChipDensity.compact => 88,
-        OpponentChipDensity.tight => 88,
+        OpponentChipDensity.roomy => 78,
+        OpponentChipDensity.compact => 74,
+        OpponentChipDensity.tight => 74,
       };
 
   double get botRowHeight => switch (this) {
@@ -78,9 +78,4 @@ extension OpponentChipDensityX on OpponentChipDensity {
         OpponentChipDensity.tight => 6,
       };
 
-  bool showTitleText(bool isTurn) => switch (this) {
-        OpponentChipDensity.roomy => true,
-        OpponentChipDensity.compact => isTurn,
-        OpponentChipDensity.tight => isTurn,
-      };
 }

@@ -1,12 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../../models/game_state.dart';
-import '../../models/uno_card.dart';
-import '../uno_card_widget.dart';
 import '../uno_circle_button.dart';
-import 'game_theme.dart';
 
-/// Header tối giản: back trái, tiêu đề giữa, chiều/màu/settings phải.
+/// Header tối giản: back trái, tiêu đề giữa, nút phụ phải.
 class GameTableHeader extends StatelessWidget {
   const GameTableHeader({
     super.key,
@@ -14,19 +11,23 @@ class GameTableHeader extends StatelessWidget {
     required this.onBack,
     this.title,
     this.onSettings,
+    this.onPlayersList,
     this.compactBack = true,
     this.showBack = true,
     this.showSettings = true,
+    this.showPlayersList = false,
   });
 
   final GameState game;
   final VoidCallback onBack;
   final VoidCallback? onSettings;
+  final VoidCallback? onPlayersList;
   final String? title;
   /// Nút back nhỏ hơn, khó bấm nhầm khi đang chơi.
   final bool compactBack;
   final bool showBack;
   final bool showSettings;
+  final bool showPlayersList;
 
   @override
   Widget build(BuildContext context) {
@@ -56,31 +57,18 @@ class GameTableHeader extends StatelessWidget {
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(
-                    game.direction == PlayDirection.clockwise
-                        ? Icons.rotate_right
-                        : Icons.rotate_left,
-                    color: GameTheme.gold.withValues(alpha: 0.85),
-                    size: 22,
-                  ),
-                  const SizedBox(width: 10),
-                  Container(
-                    width: 20,
-                    height: 20,
-                    decoration: BoxDecoration(
-                      color: unoColor(game.activeColor),
-                      shape: BoxShape.circle,
-                      border: Border.all(color: GameTheme.gold, width: 1.5),
-                      boxShadow: [
-                        BoxShadow(
-                          color: unoColor(game.activeColor).withValues(alpha: 0.45),
-                          blurRadius: 8,
-                        ),
-                      ],
+                  if (showPlayersList && onPlayersList != null)
+                    UnoCircleButton(
+                      icon: Icons.groups_rounded,
+                      label: '',
+                      showLabel: false,
+                      size: compactBack ? 38 : 44,
+                      iconScale: compactBack ? 0.48 : 0.52,
+                      onTap: onPlayersList!,
                     ),
-                  ),
                   if (showSettings && onSettings != null) ...[
-                    const SizedBox(width: 6),
+                    if (showPlayersList && onPlayersList != null)
+                      const SizedBox(width: 6),
                     UnoCircleButton(
                       icon: Icons.settings_rounded,
                       label: '',

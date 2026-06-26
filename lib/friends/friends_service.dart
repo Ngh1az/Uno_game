@@ -8,6 +8,7 @@ import 'code_generator.dart';
 import '../security/action_rate_limit.dart';
 import 'friend_models.dart';
 import 'presence_service.dart';
+import 'room_invite_policy.dart';
 
 class FriendsException implements Exception {
   FriendsException(this.message);
@@ -362,74 +363,46 @@ class FriendsService {
     if (uid.isEmpty) return Stream.value(const []);
 
     return Stream.multi((controller) {
-      final profileSubs =
-          <String, StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>>{};
-      final profiles = <String, FriendProfile>{};
-      var currentUids = <String>[];
+      var refreshGeneration = 0;
 
-      void emitSorted() {
-        final friends = currentUids
-            .map((id) => profiles[id])
-            .whereType<FriendProfile>()
-            .toList()
-          ..sort((a, b) => a.displayName.compareTo(b.displayName));
-        _friendsCache = friends;
-        if (!controller.isClosed) controller.add(friends);
-      }
-
-      void syncProfileListeners(List<String> uids) {
-        final target = uids.toSet();
-        for (final id in profileSubs.keys.toList()) {
-          if (!target.contains(id)) {
-            profileSubs.remove(id)?.cancel();
-            profiles.remove(id);
-          }
+      Future<void> refresh() async {
+        final generation = ++refreshGeneration;
+        try {
+          final snap = await _friendships
+              .where('members', arrayContains: uid)
+              .get();
+          if (generation != refreshGeneration || controller.isClosed) return;
+          final friends = await _friendsFromSnapshot(snap);
+          _friendsCache = friends;
+          if (!controller.isClosed) controller.add(friends);
+        } catch (e, stack) {
+          if (!controller.isClosed) controller.addError(e, stack);
         }
-        for (final id in uids) {
-          if (profileSubs.containsKey(id)) continue;
-          profileSubs[id] = _users.doc(id).snapshots().listen(
-            (snap) {
-              if (!snap.exists) {
-                profiles.remove(id);
-              } else {
-                profiles[id] = _profileFromData(id, snap.data()!);
-              }
-              emitSorted();
-            },
-            onError: controller.addError,
-          );
-        }
-        emitSorted();
       }
 
       final cached = _friendsCache;
       if (cached != null) {
         controller.add(cached);
       }
+      unawaited(refresh());
 
       final friendshipSub = _friendships
           .where('members', arrayContains: uid)
           .snapshots()
           .listen(
-            (snap) {
-              currentUids = _friendUidsFromSnapshot(snap);
-              syncProfileListeners(currentUids);
-            },
+            (_) => unawaited(refresh()),
             onError: controller.addError,
           );
 
-      // Cập nhật khi hết hạn ngưỡng online theo lastActiveAt (không cần sự kiện Firestore).
       final tickTimer = Timer.periodic(
         const Duration(seconds: 30),
-        (_) => emitSorted(),
+        (_) => unawaited(refresh()),
       );
 
       controller.onCancel = () {
+        refreshGeneration++;
         friendshipSub.cancel();
         tickTimer.cancel();
-        for (final sub in profileSubs.values) {
-          sub.cancel();
-        }
       };
     });
   }
@@ -476,6 +449,109 @@ class FriendsService {
     return _profileFromData(friendUid, snap.data()!);
   }
 
+  /// `true` khi user đang trong phòng có ván [RoomStatus.playing].
+  Future<bool> isUserInActiveGame(String userUid) async {
+    final map = await playingStatesFor([userUid]);
+    return map[userUid] ?? false;
+  }
+
+  /// Một lần đọc `users` (whereIn) — dùng cho sheet mời bạn.
+  Future<Map<String, bool>> playingStatesFor(Iterable<String> userUids) async {
+    final ids = userUids.where((id) => id.isNotEmpty).toSet().toList();
+    if (ids.isEmpty) return {};
+
+    final result = <String, bool>{};
+    final needsRoomLookup = <String, String>{};
+
+    for (var i = 0; i < ids.length; i += 10) {
+      final end = i + 10 > ids.length ? ids.length : i + 10;
+      final chunk = ids.sublist(i, end);
+      final snap = await _users.where(FieldPath.documentId, whereIn: chunk).get();
+      for (final doc in snap.docs) {
+        final playing = _playingFromUserData(doc.data(), needsRoomLookup, doc.id);
+        if (playing != null) {
+          result[doc.id] = playing;
+        }
+      }
+    }
+
+    if (needsRoomLookup.isNotEmpty) {
+      await Future.wait(
+        needsRoomLookup.entries.map((e) async {
+          final userUid = e.key;
+          final roomCode = e.value;
+          final roomSnap = await _db.collection('rooms').doc(roomCode).get();
+          bool playing = false;
+          if (roomSnap.exists) {
+            final roomData = roomSnap.data()!;
+            final status = roomData['status'] as String?;
+            if (blocksRoomInviteForActiveRoom(status)) {
+              final pids =
+                  (roomData['playerIds'] as List?)?.cast<String>() ?? [];
+              playing = pids.contains(userUid);
+            }
+          }
+          result[userUid] = playing;
+          // Tự dọn stale tracker nếu user hiện tại không thực sự đang chơi.
+          if (!playing && userUid == uid) {
+            unawaited(_clearStaleActiveRoom(userUid));
+          }
+        }),
+      );
+    }
+
+    for (final id in ids) {
+      result.putIfAbsent(id, () => false);
+    }
+    return result;
+  }
+
+  bool? _playingFromUserData(
+    Map<String, dynamic> data,
+    Map<String, String> needsRoomLookup,
+    String userUid,
+  ) {
+    final code = (data['activeRoomCode'] as String?)?.trim();
+    final cached = data['activeRoomStatus'] as String?;
+    if (cached != null && cached.isNotEmpty) {
+      if (!blocksRoomInviteForActiveRoom(cached)) return false;
+      // `playing` — xác minh phòng thật, tránh chặn invite do status cũ.
+      if (code == null || code.isEmpty) return false;
+      needsRoomLookup[userUid] = code;
+      return null;
+    }
+    if (code == null || code.isEmpty) return false;
+    needsRoomLookup[userUid] = code;
+    return null;
+  }
+
+  Future<void> _clearStaleActiveRoom(String userUid) async {
+    try {
+      await _users.doc(userUid).set({
+        'activeRoomCode': FieldValue.delete(),
+        'activeRoomStatus': FieldValue.delete(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      if (kDebugMode) debugPrint('FriendsService._clearStaleActiveRoom: $e');
+    }
+  }
+
+  /// Xóa mọi lời mời phòng đang chờ (khi bắt đầu ván).
+  Future<void> dismissAllRoomInvites() async {
+    if (uid.isEmpty) return;
+    try {
+      final snap = await _roomInvites(uid).get();
+      if (snap.docs.isEmpty) return;
+      final batch = _db.batch();
+      for (final doc in snap.docs) {
+        batch.delete(doc.reference);
+      }
+      await batch.commit();
+    } catch (e) {
+      if (kDebugMode) debugPrint('FriendsService.dismissAllRoomInvites: $e');
+    }
+  }
+
   /// Mời bạn online vào phòng đang chờ.
   Future<void> sendRoomInvite({
     required String toUid,
@@ -510,7 +586,14 @@ class FriendsService {
       throw FriendsException('Chỉ mời được bạn bè.');
     }
 
+    if (await isUserInActiveGame(toUid)) {
+      throw FriendsException(
+        'Người này đang chơi. Hãy mời lại sau khi ván kết thúc.',
+      );
+    }
+
     final expiresAt = DateTime.now().add(const Duration(minutes: 30));
+
     await _roomInvites(toUid).add({
       'fromUid': myUid,
       'fromName': fromName,
@@ -522,12 +605,9 @@ class FriendsService {
 
   Stream<List<RoomInvite>> watchRoomInvites() {
     if (uid.isEmpty) return Stream.value(const []);
-    return _roomInvites(uid)
-        .orderBy('createdAt', descending: true)
-        .limit(20)
-        .snapshots()
-        .map((snap) {
-      return snap.docs
+    // Không orderBy trên server — tránh lỗi thiếu composite index; sort client.
+    return _roomInvites(uid).limit(20).snapshots().map((snap) {
+      final invites = snap.docs
           .map((doc) {
             final data = doc.data();
             return RoomInvite(
@@ -540,7 +620,13 @@ class FriendsService {
             );
           })
           .where((i) => !i.isExpired)
-          .toList();
+          .toList()
+        ..sort((a, b) {
+          final at = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+          final bt = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+          return bt.compareTo(at);
+        });
+      return invites;
     });
   }
 

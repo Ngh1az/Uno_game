@@ -14,15 +14,25 @@ class CloudProgressService {
 
   static const _collection = 'users';
 
+  /// Firestore rules chỉ cho tăng tối đa 500 xu mỗi lần ghi.
+  static const _maxCoinsDeltaPerWrite = 500;
+
+  /// Khớp validProgressDelta trong firestore.rules.
+  static const _maxGamesPlayedDelta = 15;
+  static const _maxOfflineWinsDelta = 5;
+  static const _maxOnlineJoinsDelta = 10;
+  static const _maxOnlineWinsDelta = 5;
+
   FirebaseFirestore get _db => FirebaseFirestore.instance;
 
   /// Gộp dữ liệu local với cloud sau khi đăng nhập Google.
-  Future<void> sync(
+  /// Trả về `true` nếu sync thành công, `false` nếu có lỗi (mạng / quyền).
+  Future<bool> sync(
     String uid, {
     String? displayName,
     String? photoUrl,
   }) async {
-    if (uid.isEmpty) return;
+    if (uid.isEmpty) return false;
 
     try {
       final ref = _db.collection(_collection).doc(uid);
@@ -32,16 +42,18 @@ class CloudProgressService {
       final quest = DailyQuestStore.instance;
       final titles = TitleStore.instance;
 
+      // Xu: lấy max(local, cloud) để không bao giờ mất xu của người chơi.
       final localCoins = quest.coins;
       final cloudCoins = _readInt(cloud['coins']);
       final mergedCoins = ProgressBounds.clampCoins(
         localCoins > cloudCoins ? localCoins : cloudCoins,
       );
+      await quest.applyCloudCoins(mergedCoins);
 
-      if (mergedCoins != localCoins) {
-        quest.coins = mergedCoins;
-        await quest.persistCoins();
-        quest.notifyListeners();
+      // Nhiệm vụ ngày/tuần: gộp an toàn (max progress, OR claimed).
+      final cloudQuests = cloud['quests'];
+      if (cloudQuests is Map) {
+        await quest.mergeCloudQuests(Map<String, dynamic>.from(cloudQuests));
       }
 
       _mergeTitleStats(titles, cloud);
@@ -50,14 +62,12 @@ class CloudProgressService {
       }
       await titles.persistFromCloudMerge();
 
+      // Xu + stats đẩy riêng (chunked) — tránh rules từ chối khi nhảy lớn.
+      await pushCoins(uid, mergedCoins);
+      await pushTitles(uid);
+
       final payload = <String, dynamic>{
-        'coins': mergedCoins,
-        'gamesPlayed': ProgressBounds.clampStat(titles.gamesPlayed),
-        'offlineWins': ProgressBounds.clampStat(titles.offlineWins),
-        'onlineJoins': ProgressBounds.clampStat(titles.onlineJoins),
-        'onlineWins': ProgressBounds.clampStat(titles.onlineWins),
-        'unlockedTitles': titles.unlockedIds.toList(),
-        'seenUnlocks': titles.seenUnlockIds.take(64).toList(),
+        'quests': quest.questCloudPayload(),
         'updatedAt': FieldValue.serverTimestamp(),
       };
       final name = displayName?.trim();
@@ -81,24 +91,67 @@ class CloudProgressService {
           debugPrint('CloudProgressService.ensureFriendCode failed: $e\n$stack');
         }
       }
+      return true;
     } catch (e, stack) {
       if (kDebugMode) {
         debugPrint('CloudProgressService.sync failed: $e\n$stack');
       }
+      return false;
     }
   }
 
-  Future<void> pushCoins(String uid, int coins) async {
+  /// Đẩy snapshot nhiệm vụ ngày/tuần lên cloud (gọi sau khi quest thay đổi).
+  Future<void> pushQuests(String uid) async {
     if (uid.isEmpty) return;
-    final safe = ProgressBounds.clampCoins(coins);
     try {
       await _db.collection(_collection).doc(uid).set(
         {
-          'coins': safe,
+          'quests': DailyQuestStore.instance.questCloudPayload(),
           'updatedAt': FieldValue.serverTimestamp(),
         },
         SetOptions(merge: true),
       );
+    } catch (e) {
+      if (kDebugMode) debugPrint('CloudProgressService.pushQuests failed: $e');
+    }
+  }
+
+  /// Đẩy số xu lên cloud. Tăng theo từng bước ≤500 để qua Firestore rules.
+  Future<void> pushCoins(String uid, int coins) async {
+    if (uid.isEmpty) return;
+    final target = ProgressBounds.clampCoins(coins);
+    final ref = _db.collection(_collection).doc(uid);
+
+    try {
+      while (true) {
+        final snap = await ref.get();
+        final current = snap.exists ? _readInt(snap.data()?['coins']) : 0;
+
+        if (current == target) return;
+
+        if (current > target) {
+          await ref.set(
+            {
+              'coins': target,
+              'updatedAt': FieldValue.serverTimestamp(),
+            },
+            SetOptions(merge: true),
+          );
+          return;
+        }
+
+        final step = (target - current).clamp(1, _maxCoinsDeltaPerWrite);
+        final next = current + step;
+        await ref.set(
+          {
+            'coins': next,
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
+
+        if (next >= target) return;
+      }
     } catch (e) {
       if (kDebugMode) debugPrint('CloudProgressService.pushCoins failed: $e');
     }
@@ -107,13 +160,37 @@ class CloudProgressService {
   Future<void> pushTitles(String uid) async {
     if (uid.isEmpty) return;
     final titles = TitleStore.instance;
+    final ref = _db.collection(_collection).doc(uid);
+
     try {
+      await _pushStatField(
+        ref,
+        'gamesPlayed',
+        titles.gamesPlayed,
+        _maxGamesPlayedDelta,
+      );
+      await _pushStatField(
+        ref,
+        'offlineWins',
+        titles.offlineWins,
+        _maxOfflineWinsDelta,
+      );
+      await _pushStatField(
+        ref,
+        'onlineJoins',
+        titles.onlineJoins,
+        _maxOnlineJoinsDelta,
+      );
+      await _pushStatField(
+        ref,
+        'onlineWins',
+        titles.onlineWins,
+        _maxOnlineWinsDelta,
+      );
+
       final payload = <String, dynamic>{
-        'gamesPlayed': ProgressBounds.clampStat(titles.gamesPlayed),
-        'offlineWins': ProgressBounds.clampStat(titles.offlineWins),
-        'onlineJoins': ProgressBounds.clampStat(titles.onlineJoins),
-        'onlineWins': ProgressBounds.clampStat(titles.onlineWins),
-        'unlockedTitles': ProgressBounds.clampUnlocked(titles.unlockedIds).toList(),
+        'unlockedTitles':
+            ProgressBounds.clampUnlocked(titles.unlockedIds).toList(),
         'seenUnlocks': titles.seenUnlockIds.take(64).toList(),
         'updatedAt': FieldValue.serverTimestamp(),
       };
@@ -123,12 +200,35 @@ class CloudProgressService {
       } else {
         payload['equippedTitle'] = FieldValue.delete();
       }
-      await _db.collection(_collection).doc(uid).set(
-        payload,
-        SetOptions(merge: true),
-      );
+      await ref.set(payload, SetOptions(merge: true));
     } catch (e) {
       if (kDebugMode) debugPrint('CloudProgressService.pushTitles failed: $e');
+    }
+  }
+
+  /// Tăng một stat lên [target] theo từng bước ≤ [maxStep] (khớp Firestore rules).
+  Future<void> _pushStatField(
+    DocumentReference<Map<String, dynamic>> ref,
+    String field,
+    int target,
+    int maxStep,
+  ) async {
+    final safeTarget = ProgressBounds.clampStat(target);
+    while (true) {
+      final snap = await ref.get();
+      final current = snap.exists ? _readInt(snap.data()?[field]) : 0;
+      final step = ProgressBounds.statChunkStep(current, safeTarget, maxStep);
+      if (step == 0) return;
+
+      final next = current + step;
+      await ref.set(
+        {
+          field: next,
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+      if (next >= safeTarget) return;
     }
   }
 
