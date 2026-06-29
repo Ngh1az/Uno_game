@@ -158,6 +158,7 @@ abstract final class GamePremiumDialog {
     required String winnerName,
     required String leaveLabel,
     required VoidCallback onLeave,
+    String? winSubtitle,
     String? replayLabel,
     VoidCallback? onReplay,
   }) {
@@ -191,7 +192,7 @@ abstract final class GamePremiumDialog {
               const SizedBox(height: 8),
               Text(
                 youWon
-                    ? 'Chúc mừng, bạn đã hết bài!'
+                    ? (winSubtitle ?? 'Chúc mừng, bạn đã hết bài!')
                     : '$winnerName đã thắng.',
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: Colors.white70, height: 1.4),

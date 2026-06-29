@@ -3,15 +3,15 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../app_settings.dart';
-import '../../notifications/in_app_notifications.dart';
 import '../../daily_quests/daily_quest_store.dart';
 import '../../friends/friends_service.dart';
+import '../../friends/presence_service.dart';
 import '../../models/game_state.dart';
 import '../../models/uno_card.dart';
 import '../../models/uno_player.dart';
 import '../../online/online_game_controller.dart';
-import '../../online/auth_service.dart';
 import '../../online/turn_timeout_watcher.dart';
+import '../../game/game_limits.dart';
 import '../../game/turn_timeout_policy.dart';
 import '../../online/waiting_room_session.dart';
 import '../../titles/title_store.dart';
@@ -29,7 +29,6 @@ import '../../widgets/game/game_status_bar.dart';
 import '../../widgets/game/game_table_header.dart';
 import '../../widgets/game/game_table_shell.dart';
 import '../../widgets/game/game_theme.dart';
-import '../../widgets/google_account_gate.dart';
 import '../../widgets/invite_friends_sheet.dart';
 import '../../widgets/room_players_sheet.dart';
 import '../../widgets/game/opponent_chip_density.dart';
@@ -45,7 +44,7 @@ class RoomScreen extends StatefulWidget {
   State<RoomScreen> createState() => _RoomScreenState();
 }
 
-class _RoomScreenState extends State<RoomScreen> with WidgetsBindingObserver {
+class _RoomScreenState extends State<RoomScreen> {
   late final OnlineGameController _c;
   final _eventFeedback = GameEventFeedback();
   final _discardKey = GlobalKey();
@@ -67,8 +66,6 @@ class _RoomScreenState extends State<RoomScreen> with WidgetsBindingObserver {
   RoomStatus? _lastRoomStatus;
   int? _introBaselineLogLength;
   String? _introBaselineTopCard;
-  bool _wasMyTurn = false;
-  bool _away = false;
   bool _kickedHandled = false;
   int _handResetToken = 0;
   late final TurnTimeoutWatcher _timeoutWatcher;
@@ -77,7 +74,6 @@ class _RoomScreenState extends State<RoomScreen> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     _c = WaitingRoomSession.instance.bind(widget.code);
     _timeoutWatcher = TurnTimeoutWatcher(controller: _c);
     _timeoutWatcher.start();
@@ -93,9 +89,11 @@ class _RoomScreenState extends State<RoomScreen> with WidgetsBindingObserver {
       _intro.markCompleted(GameMatchIntroController.fingerprint(_c.game!));
       _snapshotHands(_c.game!);
     }
-    if (!AuthService().isGuest) {
-      unawaited(FriendsService().warmFriendsCache());
+    final uid = _c.uid;
+    if (uid.isNotEmpty) {
+      unawaited(PresenceService.instance.start(uid));
     }
+    unawaited(FriendsService().warmFriendsCache());
   }
 
   void _onIntroChange() {
@@ -110,11 +108,6 @@ class _RoomScreenState extends State<RoomScreen> with WidgetsBindingObserver {
     _selectedHandIndex = null;
     _suppressPlayAnim = false;
     _suppressDrawAnim = false;
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    _away = state != AppLifecycleState.resumed;
   }
 
   void _onChange() {
@@ -189,20 +182,6 @@ class _RoomScreenState extends State<RoomScreen> with WidgetsBindingObserver {
     if (_c.isPlaying) {
       _winShown = false;
       if (!_c.isMyTurn) _selectedHandIndex = null;
-      final myTurn =
-          _c.isMyTurn && _intro.isDone && !_intro.blocksInteraction;
-      final away = _away || InAppNotifications.appInBackground;
-      if (myTurn && !_wasMyTurn && away && game != null) {
-        final turnKey =
-            '${widget.code}-${game.log.length}-${game.currentPlayer.id}';
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted) return;
-          InAppNotifications.notifyMyTurn(context, turnKey: turnKey);
-        });
-      }
-      _wasMyTurn = myTurn;
-    } else {
-      _wasMyTurn = false;
     }
     setState(() {});
   }
@@ -301,7 +280,6 @@ class _RoomScreenState extends State<RoomScreen> with WidgetsBindingObserver {
   void dispose() {
     _countdownTimer?.cancel();
     _timeoutWatcher.dispose();
-    WidgetsBinding.instance.removeObserver(this);
     if (WaitingRoomSession.instance.controller == _c) {
       _c.removeListener(_onChange);
     }
@@ -661,7 +639,6 @@ class _RoomScreenState extends State<RoomScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _openInviteFriends() async {
-    if (!await requireGoogleAccount(context)) return;
     if (!mounted) return;
     await InviteFriendsSheet.show(context, roomCode: widget.code);
   }
@@ -713,13 +690,15 @@ class _RoomScreenState extends State<RoomScreen> with WidgetsBindingObserver {
     final showCatch = catchableId != null &&
         catchableId != meId &&
         !_introBlocksPlay;
-    final statusLabel = _intro.phase == GameMatchIntroPhase.dealing
-        ? 'Đang chia bài...'
-        : _intro.phase == GameMatchIntroPhase.countdown
-            ? 'Chuẩn bị...'
-            : myTurn
-                ? 'Lượt của bạn'
-                : 'Lượt ${game.currentPlayer.name}';
+    final statusLabel = _c.isFinished
+        ? 'Ván kết thúc'
+        : _intro.phase == GameMatchIntroPhase.dealing
+            ? 'Đang chia bài...'
+            : _intro.phase == GameMatchIntroPhase.countdown
+                ? 'Chuẩn bị...'
+                : myTurn
+                    ? 'Lượt của bạn'
+                    : 'Lượt ${game.currentPlayer.name}';
     final turnSecs = _c.turnTimeRemaining?.inSeconds;
 
     return AbsorbPointer(
@@ -740,9 +719,11 @@ class _RoomScreenState extends State<RoomScreen> with WidgetsBindingObserver {
           padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
           child: GameOpponentRow(
             itemCount: opponents.length,
-            activeIndex: opponents.indexWhere(
-              (p) => p.id == game.currentPlayer.id,
-            ).clamp(0, opponents.isEmpty ? 0 : opponents.length - 1),
+            activeIndex: _c.isFinished
+                ? 0
+                : opponents.indexWhere(
+                    (p) => p.id == game.currentPlayer.id,
+                  ).clamp(0, opponents.isEmpty ? 0 : opponents.length - 1),
             density: density,
             itemBuilder: (context, i) {
               final p = opponents[i];
@@ -750,7 +731,9 @@ class _RoomScreenState extends State<RoomScreen> with WidgetsBindingObserver {
               final virtualCount = _intro.virtualHandCounts[p.id];
               return GameOpponentChip(
                 player: p,
-                isTurn: !_introBlocksPlay && game.currentPlayer.id == p.id,
+                isTurn: !_introBlocksPlay &&
+                    !_c.isFinished &&
+                    game.currentPlayer.id == p.id,
                 isBot: false,
                 density: density,
                 photoUrl: profile?.photoUrl,
@@ -942,14 +925,23 @@ class _RoomScreenState extends State<RoomScreen> with WidgetsBindingObserver {
       TitleStore.instance.recordOnlineWin();
       DailyQuestStore.instance.markOnlineWin();
     }
+    final room = _c.room;
+    final canReplay = _c.isHost &&
+        room != null &&
+        room.players.length >= GameLimits.minPlayers;
     GamePremiumDialog.showWin(
       context: context,
       youWon: iWon,
       winnerName: winner.name,
       leaveLabel: 'Về sảnh',
       onLeave: () => Navigator.of(context).pop(),
-      replayLabel: _c.isHost ? 'Chơi lại' : null,
-      onReplay: _c.isHost
+      winSubtitle: iWon
+          ? (game.wonByForfeit
+              ? 'Đối thủ đã rời — bạn thắng!'
+              : 'Chúc mừng, bạn đã hết bài!')
+          : null,
+      replayLabel: canReplay ? 'Chơi lại' : null,
+      onReplay: canReplay
           ? () {
               _eventFeedback.reset();
               _handCounts.clear();

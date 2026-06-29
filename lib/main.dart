@@ -57,7 +57,7 @@ class _UnoAppState extends State<UnoApp> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final auth = AuthService();
     final uid = auth.currentUser?.uid;
-    if (uid == null || uid.isEmpty || auth.isGuest) return;
+    if (uid == null || uid.isEmpty) return;
 
     switch (state) {
       case AppLifecycleState.paused:

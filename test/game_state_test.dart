@@ -185,6 +185,7 @@ void main() {
     g.playCard('p1', last);
     expect(g.status, GameStatus.finished);
     expect(g.winnerId, 'p1');
+    expect(g.wonByForfeit, isFalse);
   });
 
   test('Đánh đúng lá khi có 2 lá trùng trong tay', () {

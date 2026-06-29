@@ -37,7 +37,7 @@ class _FriendsScreenState extends State<FriendsScreen>
 
   Future<void> _ensureMyFriendCode() async {
     final uid = AuthService().currentUser?.uid;
-    if (uid == null || uid.isEmpty || AuthService().isGuest) return;
+    if (uid == null || uid.isEmpty) return;
     try {
       await _service.ensureFriendCode(uid);
     } on FriendsException catch (e) {
@@ -409,6 +409,10 @@ class _FriendsScreenState extends State<FriendsScreen>
           separatorBuilder: (_, _) => const SizedBox(height: 8),
           itemBuilder: (context, i) {
             final req = requests[i];
+            final fromLabel = FriendsService.displayLabel(
+              req.fromName,
+              req.fromUid,
+            );
             return DecoratedBox(
               decoration: BoxDecoration(
                 color: const Color(0x992A0707),
@@ -418,11 +422,11 @@ class _FriendsScreenState extends State<FriendsScreen>
               child: ListTile(
                 leading: UserAvatar(
                   photoUrl: req.fromPhotoUrl,
-                  displayName: req.fromName ?? 'Người chơi',
+                  displayName: fromLabel,
                   radius: 22,
                 ),
                 title: Text(
-                  req.fromName ?? 'Người chơi',
+                  fromLabel,
                   style: const TextStyle(color: Colors.white),
                 ),
                 subtitle: const Text(

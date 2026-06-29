@@ -2,6 +2,7 @@ import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:uno_game/models/game_state.dart';
+import 'package:uno_game/models/uno_card.dart';
 import 'package:uno_game/models/uno_player.dart';
 
 void main() {
@@ -30,5 +31,28 @@ void main() {
       restored.players.first.hand.length,
       original.players.first.hand.length,
     );
+  });
+
+  test('fromJson clamp currentPlayerIndex khi lệch số người', () {
+    final player = UnoPlayer(id: 'a', name: 'A');
+    final json = {
+      'players': [player.toJson()],
+      'drawPile': [],
+      'discardPile': [],
+      'currentPlayerIndex': 1,
+      'direction': PlayDirection.clockwise.name,
+      'activeColor': CardColor.red.name,
+      'status': GameStatus.finished.name,
+      'winnerId': 'a',
+      'drawnThisTurn': false,
+      'pendingDrawCount': 0,
+      'log': <String>[],
+    };
+
+    final restored = GameState.fromJson(json);
+
+    expect(restored.players.length, 1);
+    expect(restored.currentPlayerIndex, 0);
+    expect(restored.currentPlayer.id, 'a');
   });
 }

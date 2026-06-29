@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/game_state.dart';
 import '../models/uno_player.dart';
 import '../online/room.dart';
+import '../user/player_display_name.dart';
 import 'game/game_theme.dart';
 import 'user_avatar.dart';
 
@@ -111,6 +112,7 @@ class RoomPlayersSheet extends StatelessWidget {
                   final isTurn = currentId == rp.id;
                   final strikes = gp == null ? 0 : game!.timeoutStrikeCount(rp.id);
                   final canKick = isHost && !isMe && onKick != null;
+                  final label = PlayerDisplayName.roomLabel(rp.name, rp.id);
 
                   return Container(
                     padding: const EdgeInsets.symmetric(
@@ -132,7 +134,7 @@ class RoomPlayersSheet extends StatelessWidget {
                       children: [
                         UserAvatar(
                           photoUrl: rp.photoUrl,
-                          displayName: rp.name,
+                          displayName: label,
                           radius: 22,
                         ),
                         const SizedBox(width: 12),
@@ -144,7 +146,7 @@ class RoomPlayersSheet extends StatelessWidget {
                                 children: [
                                   Flexible(
                                     child: Text(
-                                      rp.name,
+                                      label,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: TextStyle(

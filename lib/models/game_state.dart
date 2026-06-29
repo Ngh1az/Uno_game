@@ -100,6 +100,38 @@ class GameState {
   /// Người chơi đang tới lượt.
   UnoPlayer get currentPlayer => players[currentPlayerIndex];
 
+  /// Thắng do đối thủ rời / bị đuổi / timeout — không phải hết bài.
+  bool get wonByForfeit {
+    if (status != GameStatus.finished || winnerId == null) return false;
+    if (log.any((l) =>
+        l.contains('đã rời ván') ||
+        l.contains('bị chủ phòng đuổi') ||
+        l.contains('treo máy quá lâu') ||
+        l.contains('mất kết nối quá lâu'))) {
+      return true;
+    }
+    for (final p in players) {
+      if (p.id == winnerId) return p.hand.isNotEmpty;
+    }
+    return false;
+  }
+
+  /// Đảm bảo [currentPlayerIndex] hợp lệ sau deserialize hoặc gỡ người.
+  void normalizeCurrentPlayerIndex() {
+    if (players.isEmpty) {
+      currentPlayerIndex = 0;
+      return;
+    }
+    if (currentPlayerIndex >= players.length) {
+      if (status == GameStatus.finished && winnerId != null) {
+        final idx = players.indexWhere((p) => p.id == winnerId);
+        currentPlayerIndex = idx >= 0 ? idx : 0;
+      } else {
+        currentPlayerIndex = 0;
+      }
+    }
+  }
+
   /// Tạo ván mới: xáo bài, chia [handSize] lá mỗi người, lật lá đầu tiên.
   /// Lá khởi đầu luôn là lá số thường để tránh hiệu ứng phức tạp ngay đầu ván.
   factory GameState.newGame({
@@ -496,7 +528,8 @@ class GameState {
     'timeoutStrikes': timeoutStrikes,
   };
 
-  factory GameState.fromJson(Map<String, dynamic> json) => GameState(
+  factory GameState.fromJson(Map<String, dynamic> json) {
+    final state = GameState(
     players: (json['players'] as List)
         .map((e) => UnoPlayer.fromJson(Map<String, dynamic>.from(e as Map)))
         .toList(),
@@ -522,4 +555,7 @@ class GameState {
       (k, v) => MapEntry(k as String, (v as num).toInt()),
     ),
   );
+    state.normalizeCurrentPlayerIndex();
+    return state;
+  }
 }

@@ -68,6 +68,7 @@ bool forfeitPlayerInGame({
   if (nextIndex == null) return false;
   if (game.players.isEmpty) return true;
   if (game.players.length == 1) {
+    game.currentPlayerIndex = nextIndex;
     final winner = game.players.first;
     game.status = GameStatus.finished;
     game.winnerId = winner.id;

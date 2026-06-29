@@ -5,6 +5,7 @@ import '../daily_quests/daily_quest_store.dart';
 import '../online/guest_session_store.dart';
 import '../titles/title_store.dart';
 import 'cloud_progress_service.dart';
+import 'guest_social_profile.dart';
 import 'local_progress_migrator.dart';
 
 /// Gắn dữ liệu local (nhiệm vụ, danh hiệu, xu…) theo uid Firebase.
@@ -76,6 +77,10 @@ abstract final class UserSession {
       lastCloudSyncFailed = !ok;
     } else {
       lastCloudSyncFailed = false;
+      await GuestSocialProfile.ensure(
+        uid: uid,
+        displayName: u.displayName,
+      );
     }
   }
 

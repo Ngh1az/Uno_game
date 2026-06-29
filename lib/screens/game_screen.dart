@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../notifications/in_app_notifications.dart';
 import '../app_settings.dart';
 import '../daily_quests/daily_quest_store.dart';
 import '../titles/title_store.dart';
@@ -36,7 +35,7 @@ class GameScreen extends StatefulWidget {
   State<GameScreen> createState() => _GameScreenState();
 }
 
-class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
+class _GameScreenState extends State<GameScreen> {
   static const _compactBotThreshold = 4;
 
   late final GameController _controller;
@@ -55,8 +54,6 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   bool _suppressDrawAnim = false;
   bool _introSeqRunning = false;
   int? _selectedHandIndex;
-  bool _wasHumanTurn = false;
-  bool _away = false;
   int _handResetToken = 0;
 
   GameCardMotionLayerState? get _motion => _motionKey.currentState;
@@ -65,7 +62,6 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     _controller = GameController();
     _controller.addListener(_onChange);
     _intro.addListener(_onIntroChange);
@@ -92,11 +88,6 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     _selectedHandIndex = null;
     _suppressPlayAnim = false;
     _suppressDrawAnim = false;
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    _away = state != AppLifecycleState.resumed;
   }
 
   Future<void> _startMatchIntro(GameState game, String fp) async {
@@ -169,26 +160,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     }
     if (!_controller.isHumanTurn) {
       _selectedHandIndex = null;
-      _wasHumanTurn = false;
-    } else if (_intro.isDone && !_introBlocksPlay) {
-      final away = _away || InAppNotifications.appInBackground;
-      if (away && !_wasHumanTurn) {
-        final state = _controller.state;
-        final turnKey =
-            'offline-${state.log.length}-${state.currentPlayer.id}';
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted) return;
-          InAppNotifications.notifyMyTurn(context, turnKey: turnKey);
-        });
-      }
-      _wasHumanTurn = true;
     }
     setState(() {});
   }
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     _controller.removeListener(_onChange);
     _intro.removeListener(_onIntroChange);
     _controller.dispose();
@@ -484,13 +461,15 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final showCatch = catchableId != null &&
         catchableId != GameController.humanId &&
         !_introBlocksPlay;
-    final statusLabel = _intro.phase == GameMatchIntroPhase.dealing
-        ? 'Đang chia bài...'
-        : _intro.phase == GameMatchIntroPhase.countdown
-            ? 'Chuẩn bị...'
-            : humanTurn
-                ? 'Lượt của bạn'
-                : 'Lượt ${_controller.state.currentPlayer.name}';
+    final statusLabel = _controller.isFinished
+        ? 'Ván kết thúc'
+        : _intro.phase == GameMatchIntroPhase.dealing
+            ? 'Đang chia bài...'
+            : _intro.phase == GameMatchIntroPhase.countdown
+                ? 'Chuẩn bị...'
+                : humanTurn
+                    ? 'Lượt của bạn'
+                    : 'Lượt ${_controller.state.currentPlayer.name}';
 
     return PopScope(
       canPop: false,
@@ -586,11 +565,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   Widget _botArc(GameState state, List<UnoPlayer> bots) {
     final density = OpponentChipDensityX.forBotCount(bots.length);
+    final finished = state.status == GameStatus.finished;
 
     if (bots.length >= _compactBotThreshold) {
-      final activeIndex = bots.indexWhere(
-        (b) => b.id == state.currentPlayer.id,
-      );
+      final activeIndex = finished
+          ? 0
+          : bots.indexWhere(
+              (b) => b.id == state.currentPlayer.id,
+            );
 
       return Align(
         alignment: Alignment.topCenter,
@@ -604,10 +586,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             final catchable = state.catchableUnoPlayerId == bot.id;
             return GameOpponentChip(
               player: bot,
-              isTurn: !_introBlocksPlay && state.currentPlayer.id == bot.id,
+              isTurn: !finished &&
+                  !_introBlocksPlay &&
+                  state.currentPlayer.id == bot.id,
               isBot: true,
               density: density,
-              thinking: _controller.botThinking &&
+              thinking: !finished &&
+                  _controller.botThinking &&
                   state.currentPlayer.id == bot.id,
               cardCountOverride: _intro.virtualHandCounts[bot.id],
               catchableUno: catchable,
@@ -633,11 +618,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 height: h,
                 child: GameOpponentChip(
                   player: bots[i],
-                  isTurn: !_introBlocksPlay &&
+                  isTurn: !finished &&
+                      !_introBlocksPlay &&
                       state.currentPlayer.id == bots[i].id,
                   isBot: true,
                   density: density,
-                  thinking: _controller.botThinking &&
+                  thinking: !finished &&
+                      _controller.botThinking &&
                       state.currentPlayer.id == bots[i].id,
                   cardCountOverride: _intro.virtualHandCounts[bots[i].id],
                   catchableUno: state.catchableUnoPlayerId == bots[i].id,

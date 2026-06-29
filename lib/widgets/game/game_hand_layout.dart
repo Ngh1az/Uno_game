@@ -21,7 +21,10 @@ class GameHandLayout {
 
   double get cardHeight => cardWidth * UnoCardWidget.aspectRatio;
 
-  double get stripHeight => cardHeight + lift + 6;
+  /// Chiều cao mỗi ô (lá + chỗ nâng khi chọn / gợi ý).
+  double get slotHeight => cardHeight + lift;
+
+  double get stripHeight => slotHeight + 6;
 
   static GameHandLayout compute({
     required double viewportWidth,
@@ -74,7 +77,7 @@ class GameHandLayout {
   Offset slotLocalCenter(int cardIndex, {bool introStrip = false}) {
     final y = introStrip
         ? introVerticalPadding + stripHeight / 2
-        : stripHeight / 2;
+        : lift + cardHeight / 2;
     return Offset(
       horizontalPadding +
           cardIndex * (cardWidth + gap) +

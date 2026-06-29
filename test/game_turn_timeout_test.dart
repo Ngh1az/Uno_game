@@ -42,6 +42,67 @@ void main() {
     expect(g.players.length, 1);
   });
 
+  test('forfeitPlayerInGame — chỉnh currentPlayerIndex khi còn 1 người', () {
+    final players = [
+      UnoPlayer(id: 'a', name: 'A'),
+      UnoPlayer(id: 'b', name: 'B'),
+    ];
+    final g = GameState(
+      players: players,
+      drawPile: [const UnoCard(color: CardColor.blue, type: CardType.number, number: 1)],
+      discardPile: [
+        const UnoCard(color: CardColor.red, type: CardType.number, number: 2),
+      ],
+      currentPlayerIndex: 1,
+      direction: PlayDirection.clockwise,
+      activeColor: CardColor.red,
+      status: GameStatus.playing,
+    );
+
+    final finished = forfeitPlayerInGame(
+      game: g,
+      playerId: 'b',
+      playerName: 'B',
+      reason: 'đã rời ván',
+    );
+
+    expect(finished, isTrue);
+    expect(g.players.length, 1);
+    expect(g.currentPlayerIndex, 0);
+    expect(g.currentPlayer.id, 'a');
+  });
+
+  test('wonByForfeit — true sau khi đối thủ rời ván', () {
+    final players = [
+      UnoPlayer(id: 'a', name: 'A'),
+      UnoPlayer(id: 'b', name: 'B'),
+    ];
+    players[0].hand.add(
+      const UnoCard(color: CardColor.red, type: CardType.number, number: 3),
+    );
+    final g = GameState(
+      players: players,
+      drawPile: [const UnoCard(color: CardColor.blue, type: CardType.number, number: 1)],
+      discardPile: [
+        const UnoCard(color: CardColor.red, type: CardType.number, number: 2),
+      ],
+      currentPlayerIndex: 1,
+      direction: PlayDirection.clockwise,
+      activeColor: CardColor.red,
+      status: GameStatus.playing,
+    );
+
+    forfeitPlayerInGame(
+      game: g,
+      playerId: 'b',
+      playerName: 'B',
+      reason: 'đã rời ván',
+    );
+
+    expect(g.wonByForfeit, isTrue);
+    expect(g.winnerId, 'a');
+  });
+
   test('AutoTurnPlayer hoàn thành lượt khi có lá đánh được', () {
     final players = [
       UnoPlayer(id: 'p1', name: 'A'),

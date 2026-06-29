@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import '../app_settings.dart';
 import '../game/game_limits.dart';
 import '../online/auth_service.dart';
+import '../user/player_display_name.dart';
 import '../widgets/app_snack.dart';
+import '../widgets/edit_display_name_dialog.dart';
 import '../widgets/sign_out_dialog.dart';
 import '../widgets/uno_circle_button.dart';
 import '../widgets/user_avatar.dart';
@@ -42,7 +44,7 @@ class SettingsScreen extends StatelessWidget {
                       _section(
                         'Tài khoản',
                         [
-                          _accountTile(auth),
+                          _AccountSection(auth: auth),
                         ],
                       ),
                       _section(
@@ -285,26 +287,6 @@ class SettingsScreen extends StatelessWidget {
     );
   }
 
-  Widget _accountTile(AuthService auth) {
-    final name = auth.displayName;
-    final isGuest = auth.isGuest;
-    return ListTile(
-      leading: UserAvatar(
-        photoUrl: auth.photoUrl,
-        displayName: name,
-        radius: 22,
-      ),
-      title: Text(
-        name,
-        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
-      ),
-      subtitle: Text(
-        isGuest ? 'Tài khoản khách' : 'Đăng nhập Google',
-        style: const TextStyle(color: Colors.white54, fontSize: 13),
-      ),
-    );
-  }
-
   Widget _switchTile(
     BuildContext context, {
     required IconData icon,
@@ -474,7 +456,7 @@ class SettingsScreen extends StatelessWidget {
     );
   }
 
-  static Future<void> _pickLanguage(BuildContext context) async {
+  Future<void> _pickLanguage(BuildContext context) async {
     final settings = AppSettings.instance;
     final picked = await showDialog<String>(
       context: context,
@@ -493,7 +475,7 @@ class SettingsScreen extends StatelessWidget {
     if (picked != null) settings.setLanguage(picked);
   }
 
-  static Future<void> _pickBotSpeed(BuildContext context) async {
+  Future<void> _pickBotSpeed(BuildContext context) async {
     final settings = AppSettings.instance;
     final picked = await showDialog<BotSpeed>(
       context: context,
@@ -525,7 +507,7 @@ class SettingsScreen extends StatelessWidget {
     if (picked != null) settings.setBotSpeed(picked);
   }
 
-  static Widget _dialogTile(
+  Widget _dialogTile(
     BuildContext context,
     String code,
     String label,
@@ -543,3 +525,73 @@ class SettingsScreen extends StatelessWidget {
   }
 }
 
+class _AccountSection extends StatefulWidget {
+  const _AccountSection({required this.auth});
+
+  final AuthService auth;
+
+  @override
+  State<_AccountSection> createState() => _AccountSectionState();
+}
+
+class _AccountSectionState extends State<_AccountSection> {
+  int _revision = 0;
+
+  AuthService get auth => widget.auth;
+
+  Future<void> _editName(BuildContext context) async {
+    final saved = await showEditDisplayNameDialog(context);
+    if (saved == null || !mounted) return;
+    setState(() => _revision++);
+    AppSnack.success(context, 'Đã đổi tên thành $saved');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // ignore: unused_local_variable
+    final _ = _revision;
+    final name = auth.displayName;
+    final isGuest = auth.isGuest;
+    final uid = auth.currentUser?.uid ?? '';
+    final guestHint = isGuest && PlayerDisplayName.isDefaultGuestName(name)
+        ? ' · #${PlayerDisplayName.uidSuffix(uid)}'
+        : '';
+
+    return Column(
+      children: [
+        ListTile(
+          leading: UserAvatar(
+            photoUrl: auth.photoUrl,
+            displayName: name,
+            radius: 22,
+          ),
+          title: Text(
+            name,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          subtitle: Text(
+            isGuest ? 'Tài khoản khách$guestHint' : 'Đăng nhập Google',
+            style: const TextStyle(color: Colors.white54, fontSize: 13),
+          ),
+        ),
+        if (isGuest)
+          ListTile(
+            leading: const Icon(Icons.badge_outlined, color: Color(0xFFFFC400), size: 22),
+            title: const Text(
+              'Tên hiển thị',
+              style: TextStyle(color: Colors.white, fontSize: 15),
+            ),
+            subtitle: Text(
+              name,
+              style: const TextStyle(color: Colors.white54, fontSize: 13),
+            ),
+            trailing: const Icon(Icons.chevron_right, color: Colors.white38),
+            onTap: () => _editName(context),
+          ),
+      ],
+    );
+  }
+}

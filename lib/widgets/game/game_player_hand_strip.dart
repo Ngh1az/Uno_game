@@ -102,7 +102,7 @@ class _GamePlayerHandStripState extends State<GamePlayerHandStrip> {
             controller: _scroll,
             scrollDirection: Axis.horizontal,
             physics: const BouncingScrollPhysics(),
-            clipBehavior: Clip.hardEdge,
+            clipBehavior: Clip.none,
             padding: const EdgeInsets.symmetric(
               horizontal: GameHandLayout.horizontalPadding,
             ),
@@ -179,41 +179,46 @@ class _GamePlayerHandStripState extends State<GamePlayerHandStrip> {
 
     return SizedBox(
       width: layout.cardWidth,
-      height: layout.cardHeight,
-      child: GestureDetector(
-        onTap: () {
-          final box = context.findRenderObject() as RenderBox?;
-          final globalCenter = box != null
-              ? box.localToGlobal(box.size.center(Offset.zero))
-              : Offset.zero;
-          widget.onCardTap(card, index, globalCenter);
-        },
-        child: Transform.translate(
-          offset: Offset(0, -raised),
-          child: Opacity(
-            opacity: !hintsOn || playable || !widget.isMyTurn ? 1 : 0.38,
-            child: Material(
-              color: Colors.transparent,
-              elevation: selected ? 8 : 3,
-              shadowColor: Colors.black.withValues(alpha: 0.45),
-              borderRadius: BorderRadius.circular(8),
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(8),
-                  border: selected
-                      ? Border.all(color: GameTheme.gold, width: 2.5)
-                      : null,
-                  boxShadow: hintsOn && (selected || playable)
-                      ? [
-                          BoxShadow(
-                            color: (selected ? GameTheme.gold : unoColor(card.color))
-                                .withValues(alpha: 0.35),
-                            blurRadius: 12,
-                          ),
-                        ]
-                      : null,
+      height: layout.slotHeight,
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: Padding(
+          padding: EdgeInsets.only(top: layout.lift - raised),
+          child: GestureDetector(
+            onTap: () {
+              final box = context.findRenderObject() as RenderBox?;
+              final globalCenter = box != null
+                  ? box.localToGlobal(box.size.center(Offset.zero))
+                  : Offset.zero;
+              widget.onCardTap(card, index, globalCenter);
+            },
+            child: Opacity(
+              opacity: !hintsOn || playable || !widget.isMyTurn ? 1 : 0.38,
+              child: Material(
+                color: Colors.transparent,
+                elevation: selected ? 8 : 3,
+                shadowColor: Colors.black.withValues(alpha: 0.45),
+                borderRadius: BorderRadius.circular(8),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(8),
+                    border: selected
+                        ? Border.all(color: GameTheme.gold, width: 2.5)
+                        : null,
+                    boxShadow: hintsOn && (selected || playable)
+                        ? [
+                            BoxShadow(
+                              color: (selected
+                                      ? GameTheme.gold
+                                      : unoColor(card.color))
+                                  .withValues(alpha: 0.35),
+                              blurRadius: 12,
+                            ),
+                          ]
+                        : null,
+                  ),
+                  child: UnoCardWidget(card: card, width: layout.cardWidth),
                 ),
-                child: UnoCardWidget(card: card, width: layout.cardWidth),
               ),
             ),
           ),

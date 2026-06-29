@@ -6,6 +6,7 @@ import 'package:google_sign_in/google_sign_in.dart';
 
 import '../config/google_auth_config.dart';
 import '../security/action_rate_limit.dart';
+import '../user/guest_social_profile.dart';
 import '../user/user_session.dart';
 import '../friends/presence_service.dart';
 import 'guest_session_store.dart';
@@ -219,6 +220,7 @@ class AuthService {
     await user.reload();
     if (user.isAnonymous) {
       await GuestSessionStore.save(uid: user.uid, displayName: trimmed);
+      await GuestSocialProfile.updateDisplayName(user.uid, trimmed);
     }
   }
 }

@@ -3,10 +3,8 @@ import 'package:flutter/material.dart';
 
 import '../friends/friend_models.dart';
 import '../friends/friends_service.dart';
-import '../online/auth_service.dart';
 import '../widgets/app_snack.dart';
 import '../widgets/game/game_theme.dart';
-import '../widgets/google_account_gate.dart';
 
 /// Nút kết bạn trên dòng người chơi trong phòng chờ.
 class LobbyFriendButton extends StatefulWidget {
@@ -28,7 +26,6 @@ class _LobbyFriendButtonState extends State<LobbyFriendButton> {
   bool _busy = false;
 
   Future<void> _sendRequest() async {
-    if (!await requireGoogleAccount(context)) return;
     setState(() => _busy = true);
     try {
       await _service.sendFriendRequestToUid(widget.targetUid);
@@ -74,8 +71,6 @@ class _LobbyFriendButtonState extends State<LobbyFriendButton> {
 
   @override
   Widget build(BuildContext context) {
-    if (AuthService().isGuest) return const SizedBox.shrink();
-
     return StreamBuilder<FriendLinkState>(
       stream: _service.watchLinkWith(widget.targetUid),
       builder: (context, snap) {

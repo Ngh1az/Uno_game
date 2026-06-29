@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../../online/room.dart';
 import '../../titles/title_definition.dart';
+import '../../user/player_display_name.dart';
 import '../../widgets/app_snack.dart';
 import '../../widgets/game/game_theme.dart';
 import '../../widgets/game/title_mini_badge.dart';
@@ -120,7 +121,9 @@ class WaitingRoomLobby extends StatelessWidget {
             child: OutlinedButton.icon(
               style: OutlinedButton.styleFrom(
                 foregroundColor: GameTheme.gold,
-                side: BorderSide(color: GameTheme.gold.withValues(alpha: 0.45)),
+                side: BorderSide(
+                  color: GameTheme.gold.withValues(alpha: 0.45),
+                ),
               ),
               onPressed: onInviteFriends,
               icon: const Icon(Icons.person_add_alt_1_rounded, size: 20),
@@ -193,6 +196,7 @@ class _LobbyPlayerTile extends StatelessWidget {
     final title = player.equippedTitleId == null
         ? null
         : titleById(player.equippedTitleId!);
+    final label = PlayerDisplayName.roomLabel(player.name, player.id);
 
     return Card(
       color: isHost ? const Color(0xCC2A1208) : const Color(0xAA1A0505),
@@ -231,7 +235,7 @@ class _LobbyPlayerTile extends StatelessWidget {
                 ),
                 child: UserAvatar(
                   photoUrl: player.photoUrl,
-                  displayName: player.name,
+                  displayName: label,
                   radius: 20,
                 ),
               ),
@@ -240,7 +244,7 @@ class _LobbyPlayerTile extends StatelessWidget {
           ),
         ),
         title: Text(
-          player.name,
+          label,
           style: TextStyle(
             color: isHost ? GameTheme.gold : Colors.white,
             fontWeight: isHost ? FontWeight.w800 : FontWeight.w500,
@@ -249,7 +253,7 @@ class _LobbyPlayerTile extends StatelessWidget {
         trailing: player.id != myUid
             ? LobbyFriendButton(
                 targetUid: player.id,
-                targetName: player.name,
+                targetName: label,
               )
             : null,
       ),

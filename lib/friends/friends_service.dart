@@ -5,7 +5,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 
 import 'code_generator.dart';
+import '../online/auth_service.dart';
 import '../security/action_rate_limit.dart';
+import '../user/player_display_name.dart';
 import 'friend_models.dart';
 import 'presence_service.dart';
 import 'room_invite_policy.dart';
@@ -27,6 +29,13 @@ class FriendsService {
   final FirebaseAuth _auth;
 
   String get uid => _auth.currentUser?.uid ?? '';
+
+  /// Nhãn hiển thị thống nhất (Khách #XXXX khi chưa đặt tên).
+  static String displayLabel(String? rawName, String userUid) {
+    final trimmed = rawName?.trim();
+    final base = (trimmed != null && trimmed.isNotEmpty) ? trimmed : 'Khách';
+    return PlayerDisplayName.roomLabel(base, userUid);
+  }
 
   CollectionReference<Map<String, dynamic>> get _users =>
       _db.collection('users');
@@ -187,12 +196,13 @@ class FriendsService {
 
     final mySnap = await _users.doc(myUid).get();
     final myData = mySnap.data() ?? {};
+    final fromRaw = AuthService().displayName;
     try {
       await _friendRequests.add({
         'fromUid': myUid,
         'toUid': targetUid,
         'status': 'pending',
-        'fromName': myData['displayName'] ?? 'Người chơi',
+        'fromName': displayLabel(fromRaw, myUid),
         'fromPhotoUrl': myData['photoUrl'],
         'createdAt': FieldValue.serverTimestamp(),
       });
@@ -436,7 +446,7 @@ class FriendsService {
     final name = (data['displayName'] as String?)?.trim();
     return FriendProfile(
       uid: friendUid,
-      displayName: (name != null && name.isNotEmpty) ? name : 'Người chơi',
+      displayName: displayLabel(name, friendUid),
       photoUrl: data['photoUrl'] as String?,
       lastActiveAt: (data['lastActiveAt'] as Timestamp?)?.toDate(),
       onlineFlag: data['isOnline'] as bool?,
@@ -445,7 +455,12 @@ class FriendsService {
 
   Future<FriendProfile?> _loadProfile(String friendUid) async {
     final snap = await _users.doc(friendUid).get();
-    if (!snap.exists) return null;
+    if (!snap.exists) {
+      return FriendProfile(
+        uid: friendUid,
+        displayName: displayLabel(null, friendUid),
+      );
+    }
     return _profileFromData(friendUid, snap.data()!);
   }
 

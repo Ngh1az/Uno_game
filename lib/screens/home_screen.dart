@@ -10,7 +10,6 @@ import '../widgets/home_title_card.dart';
 import '../user/user_session.dart';
 import '../friends/presence_service.dart';
 import '../widgets/background_image.dart';
-import '../widgets/google_account_gate.dart';
 import '../widgets/sign_out_dialog.dart';
 import '../widgets/user_avatar.dart';
 import '../widgets/home_footer.dart';
@@ -57,7 +56,7 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (_) {}
     await UserSession.activate(AuthService().currentUser);
     final uid = AuthService().currentUser?.uid;
-    if (uid != null && uid.isNotEmpty && !AuthService().isGuest) {
+    if (uid != null && uid.isNotEmpty) {
       await _presence.start(uid);
     }
     if (!mounted) return;
@@ -152,9 +151,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                         );
                       },
-                      onFriends: () async {
-                        if (!await requireGoogleAccount(context)) return;
-                        if (!context.mounted) return;
+                      onFriends: () {
                         Navigator.of(context).push(
                           MaterialPageRoute(
                             builder: (_) => const FriendsScreen(),
@@ -248,9 +245,15 @@ class _HomeScreenState extends State<HomeScreen> {
                 size: actionSize,
                 iconScale: 0.5,
                 onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const SettingsScreen()),
-                  );
+                  Navigator.of(context)
+                      .push(
+                        MaterialPageRoute(
+                          builder: (_) => const SettingsScreen(),
+                        ),
+                      )
+                      .then((_) {
+                    if (mounted) setState(() {});
+                  });
                 },
               ),
               SizedBox(width: compact ? 2 : 4),

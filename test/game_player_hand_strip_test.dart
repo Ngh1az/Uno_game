@@ -78,4 +78,29 @@ void main() {
       findsOneWidget,
     );
   });
+
+  testWidgets('raised playable card is not clipped at top', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 640));
+
+    final cards = _sampleHand(6);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: GamePlayerHandStrip(
+            cards: cards,
+            isMyTurn: true,
+            canPlay: (c) => c == cards[0] || c == cards[4],
+            onCardTap: (_, _, _) {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    for (final index in [0, 4]) {
+      final rect = tester.getRect(find.byType(UnoCardWidget).at(index));
+      expect(rect.top, greaterThanOrEqualTo(0));
+      expect(rect.height, greaterThan(40));
+    }
+  });
 }
