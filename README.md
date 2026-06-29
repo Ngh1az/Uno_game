@@ -52,6 +52,16 @@ flutter build apk --release
 
 Xem [android/SIGNING.md](android/SIGNING.md) để ký release đúng cách.
 
+### Phát hành qua GitHub (tự động)
+
+1. Thêm secret `GOOGLE_SERVICES_JSON` trên GitHub (xem [docs/GITHUB_RELEASE.md](docs/GITHUB_RELEASE.md)).
+2. Push tag `v1.0.0` → Actions build APK và đăng **Releases**.
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
 ## Assets (ảnh)
 
 - Nền: `assets/images/background/` — xem README trong thư mục

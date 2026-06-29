@@ -21,7 +21,7 @@ storeFile=C:\\Users\\<you>\\upload-keystore.jks
 
 ## 3. Sửa `android/app/build.gradle.kts`
 
-Thêm đọc `key.properties` và gán `signingConfigs.release` cho `buildTypes.release`.
+Đã hỗ trợ sẵn: nếu có `android/key.properties` thì release dùng keystore đó; không có thì fallback debug key (local / CI test).
 
 ## 4. Build
 
